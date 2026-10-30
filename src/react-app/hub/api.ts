@@ -59,6 +59,23 @@ export async function api<T>(
 	return data as T;
 }
 
+export interface Department {
+	id: number;
+	name: string;
+	description: string | null;
+	memberCount: number;
+}
+
+export const DEPARTMENTS_QUERY_KEY = ["departments"];
+
+export function useDepartments() {
+	return useQuery({
+		queryKey: DEPARTMENTS_QUERY_KEY,
+		queryFn: () => api<{ departments: Department[] }>("/organizations/current/departments"),
+		select: (data) => data.departments,
+	});
+}
+
 export const ME_QUERY_KEY = ["me"];
 
 // Returns null when signed out, which is a normal state rather than an error.

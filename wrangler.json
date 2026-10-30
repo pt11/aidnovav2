@@ -28,6 +28,12 @@
 		{ "pattern": "aidnova.app", "custom_domain": true },
 		{ "pattern": "hub.aidnova.app", "custom_domain": true }
 	],
+	"r2_buckets": [
+		{
+			"binding": "FILES",
+			"bucket_name": "aidnova-files"
+		}
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",

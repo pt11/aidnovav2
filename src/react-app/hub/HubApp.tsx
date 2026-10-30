@@ -16,7 +16,15 @@ import {
 	SignInPage,
 	SignUpPage,
 } from "./pages/auth";
+import { AnnouncementsPage } from "./pages/Announcements";
 import { CreateOrganizationPage } from "./pages/CreateOrganization";
+import { DashboardPage } from "./pages/Dashboard";
+import { FilesPage } from "./pages/Files";
+import { InvitePage } from "./pages/Invite";
+import { MyProfilePage } from "./pages/MyProfile";
+import { PoliciesPage } from "./pages/Policies";
+import { PolicyDetailPage } from "./pages/PolicyDetail";
+import { SettingsPage } from "./pages/Settings";
 import { UsersPage } from "./pages/Users";
 import { canManage, Header, WorkspaceShell } from "./Shell";
 import { buttonClass, LOGO, StartupScreen, StatePanel } from "./ui";
@@ -173,22 +181,25 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 		<WorkspaceShell me={me} org={org}>
 			<Switch>
 				<Route path="/">
-					<LaterPage labelKey="nav.announcements" />
+					<AnnouncementsPage canManage={manager} />
 				</Route>
 				<Route path="/dashboard">
-					<LaterPage labelKey="nav.dashboard" />
+					<DashboardPage me={me} org={org} />
 				</Route>
 				<Route path="/hub">
 					<LaterPage labelKey="nav.hub" />
 				</Route>
 				<Route path="/policies">
-					<LaterPage labelKey="nav.policies" />
+					<PoliciesPage canManage={manager} />
+				</Route>
+				<Route path="/policies/:id">
+					{({ id }) => <PolicyDetailPage key={id} id={id} canManage={manager} />}
 				</Route>
 				<Route path="/courses">
 					<LaterPage labelKey="nav.courses" />
 				</Route>
 				<Route path="/files">
-					<LaterPage labelKey="nav.files" />
+					<FilesPage canManage={manager} />
 				</Route>
 				<Route path="/calendar">
 					<LaterPage labelKey="nav.calendar" />
@@ -197,13 +208,15 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<LaterPage labelKey="shell.notifications" />
 				</Route>
 				<Route path="/my-profile">
-					<LaterPage labelKey="nav.my_profile" />
+					<MyProfilePage me={me} org={org} />
 				</Route>
 				<Route path="/users">
 					{manager ? <UsersPage me={me} role={org.role} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/reports">{managerRoute("nav.reports")}</Route>
-				<Route path="/settings">{managerRoute("nav.settings")}</Route>
+				<Route path="/settings">
+					{manager ? <SettingsPage org={org} /> : <NoAccessPage />}
+				</Route>
 				{/* Signed-in people arriving on an auth address go to the workspace. */}
 				<Route path="/sign-in">
 					<Redirect to="/" replace />
@@ -288,6 +301,8 @@ function Gate() {
 			</main>
 		);
 	}
+
+	if (location === "/invite") return <InvitePage me={me.data ?? null} />;
 
 	if (!me.data) {
 		return (

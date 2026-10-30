@@ -39,7 +39,7 @@ const ACTIVE_ORG_COOKIE = "active-org-id";
 
 export function jsonError(
 	c: Context,
-	status: 400 | 401 | 403 | 404 | 409,
+	status: 400 | 401 | 403 | 404 | 409 | 413 | 429 | 502,
 	code: string,
 	message: string,
 ) {

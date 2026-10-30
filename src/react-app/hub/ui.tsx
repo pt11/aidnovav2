@@ -1,5 +1,5 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
-import type { LucideIcon } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { CircleAlert, type LucideIcon } from "lucide-react";
 import { useI18n } from "./i18n";
 
 export const LOGO = "/aidnova-logo.png";
@@ -8,7 +8,11 @@ const BUTTON_STYLES = {
 	primary: "bg-primary text-primary-foreground hover:opacity-90",
 	outline: "border border-input bg-card text-foreground hover:bg-muted",
 	ghost: "text-foreground hover:bg-muted",
+	danger: "bg-destructive text-primary-foreground hover:opacity-90",
 };
+
+const CONTROL_CLASS =
+	"min-h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 
 export function buttonClass(
 	variant: keyof typeof BUTTON_STYLES = "primary",
@@ -39,7 +43,7 @@ export function Field({
 				id={id}
 				aria-invalid={error ? true : undefined}
 				aria-describedby={describedBy}
-				className="min-h-10 w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground aria-invalid:border-destructive"
+				className={`${CONTROL_CLASS} aria-invalid:border-destructive`}
 				{...inputProps}
 			/>
 			{(error || hint) && (
@@ -51,6 +55,198 @@ export function Field({
 				</p>
 			)}
 		</div>
+	);
+}
+
+export function TextareaField({
+	label,
+	hint,
+	...props
+}: {
+	label: string;
+	hint?: string;
+} & React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+	const id = useId();
+	return (
+		<div className="flex flex-col gap-1.5">
+			<label htmlFor={id} className="text-sm font-medium">
+				{label}
+			</label>
+			<textarea
+				id={id}
+				rows={4}
+				aria-describedby={hint ? `${id}-hint` : undefined}
+				className={CONTROL_CLASS}
+				{...props}
+			/>
+			{hint && (
+				<p id={`${id}-hint`} className="text-xs leading-5 text-muted-foreground">
+					{hint}
+				</p>
+			)}
+		</div>
+	);
+}
+
+export function SelectField({
+	label,
+	children,
+	...props
+}: {
+	label: string;
+	children: ReactNode;
+} & React.SelectHTMLAttributes<HTMLSelectElement>) {
+	const id = useId();
+	return (
+		<div className="flex flex-col gap-1.5">
+			<label htmlFor={id} className="text-sm font-medium">
+				{label}
+			</label>
+			<select id={id} className={CONTROL_CLASS} {...props}>
+				{children}
+			</select>
+		</div>
+	);
+}
+
+export function PageHeader({
+	title,
+	subtitle,
+	action,
+}: {
+	title: string;
+	subtitle?: string;
+	action?: ReactNode;
+}) {
+	return (
+		<div className="flex flex-wrap items-start justify-between gap-3">
+			<div className="min-w-0">
+				<h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+				{subtitle && (
+					<p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+				)}
+			</div>
+			{action}
+		</div>
+	);
+}
+
+export function PageLoading() {
+	const { t } = useI18n();
+	return (
+		<p role="status" className="p-6 text-sm text-muted-foreground">
+			{t("common.loading")}
+		</p>
+	);
+}
+
+export function PageError({ onRetry }: { onRetry: () => void }) {
+	const { t } = useI18n();
+	return (
+		<StatePanel
+			icon={CircleAlert}
+			title={t("error.load")}
+			action={
+				<button
+					type="button"
+					className={buttonClass("outline")}
+					onClick={onRetry}
+				>
+					{t("common.retry")}
+				</button>
+			}
+		/>
+	);
+}
+
+export function Modal({
+	title,
+	description,
+	open,
+	wide = false,
+	onClose,
+	children,
+}: {
+	title: string;
+	description?: string;
+	open: boolean;
+	wide?: boolean;
+	onClose: () => void;
+	children: ReactNode;
+}) {
+	const ref = useRef<HTMLDialogElement>(null);
+	const id = useId();
+
+	useEffect(() => {
+		const dialog = ref.current;
+		if (!dialog) return;
+		if (open && !dialog.open) dialog.showModal();
+		if (!open && dialog.open) dialog.close();
+	}, [open]);
+
+	return (
+		<dialog
+			ref={ref}
+			aria-labelledby={id}
+			onClose={onClose}
+			className={`m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-card p-6 text-foreground shadow-lg backdrop:bg-black/50 ${wide ? "max-w-3xl" : "max-w-lg"}`}
+		>
+			{open && (
+				<>
+					<h2 id={id} className="text-lg font-semibold">
+						{title}
+					</h2>
+					{description && (
+						<p className="mt-1 text-sm text-muted-foreground">{description}</p>
+					)}
+					<div className="mt-4">{children}</div>
+				</>
+			)}
+		</dialog>
+	);
+}
+
+export function ConfirmModal({
+	title,
+	description,
+	confirmLabel,
+	open,
+	pending,
+	failed,
+	onConfirm,
+	onClose,
+}: {
+	title: string;
+	description: string;
+	confirmLabel: string;
+	open: boolean;
+	pending: boolean;
+	failed: boolean;
+	onConfirm: () => void;
+	onClose: () => void;
+}) {
+	const { t } = useI18n();
+	return (
+		<Modal title={title} description={description} open={open} onClose={onClose}>
+			{failed && (
+				<div className="mb-4">
+					<Alert>{t("error.generic")}</Alert>
+				</div>
+			)}
+			<div className="flex justify-end gap-2">
+				<button type="button" className={buttonClass("outline")} onClick={onClose}>
+					{t("common.cancel")}
+				</button>
+				<button
+					type="button"
+					disabled={pending}
+					className={buttonClass("danger")}
+					onClick={onConfirm}
+				>
+					{confirmLabel}
+				</button>
+			</div>
+		</Modal>
 	);
 }
 

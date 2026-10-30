@@ -7,6 +7,7 @@ import {
 	useState,
 	type ReactNode,
 } from "react";
+import { pageTranslations } from "./i18n-pages";
 import { v1Translations } from "./i18n-v1";
 
 export type Language = "en" | "my";
@@ -15,6 +16,7 @@ const STORAGE_KEY = "aidnova_lang";
 
 const translations: Record<string, { en: string; my?: string }> = {
 	...v1Translations,
+	...pageTranslations,
 	"loading.app": { en: "Loading AidNova…", my: "AidNova ကို ဖွင့်နေသည်…" },
 	"loading.slow": {
 		en: "This is taking longer than expected. Please try again.",

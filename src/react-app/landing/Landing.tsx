@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import "./landing-base.css";
 import "./landing.css";
+import { PrivacyPolicyPage, TermsOfServicePage } from "./Legal";
 
 function hubUrl(path: string) {
 	const { protocol, hostname, port } = window.location;
@@ -1076,7 +1077,18 @@ function Footer() {
 
 type Lang = "en" | "my";
 
+const LEGAL_PAGES: Record<string, () => ReactNode> = {
+	"/privacy-policy": PrivacyPolicyPage,
+	"/terms-of-service": TermsOfServicePage,
+};
+
 function Landing() {
+	const path = window.location.pathname.replace(/\/+$/, "");
+	const LegalPage = LEGAL_PAGES[path];
+	return LegalPage ? <LegalPage /> : <Home />;
+}
+
+function Home() {
 	const [lang, setLang] = useState<Lang>("en");
 
 	return (

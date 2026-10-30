@@ -20,17 +20,11 @@ import {
 	type AppEnv,
 	type Role,
 } from "./middleware";
+import { cleanText, readJson } from "./validate";
 
 const TRIAL_DAYS = 14;
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const ROLES: Role[] = ["staff", "manager", "admin"];
-
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-	const body = await request.json().catch(() => null);
-	return body && typeof body === "object" && !Array.isArray(body)
-		? (body as Record<string, unknown>)
-		: {};
-}
 
 export const api = new Hono<AppEnv>();
 
@@ -54,7 +48,7 @@ api.get("/me", requireUser, async (c) => {
 
 api.post("/organizations", requireUser, async (c) => {
 	const body = await readJson(c.req.raw);
-	const name = typeof body.name === "string" ? body.name.trim() : "";
+	const name = cleanText(body.name);
 	const slug = typeof body.slug === "string" ? body.slug.trim() : "";
 	if (name.length < 2 || name.length > 255) {
 		return jsonError(c, 400, "INVALID_NAME", "Enter an organization name.");
@@ -147,6 +141,7 @@ api.get(
 				email: user.email,
 				role: userProfiles.role,
 				isActive: userProfiles.isActive,
+				departmentId: userProfiles.departmentId,
 				departmentName: departments.name,
 			})
 			.from(userProfiles)

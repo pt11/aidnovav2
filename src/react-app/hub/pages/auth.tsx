@@ -13,6 +13,13 @@ interface AuthError {
 	code?: string;
 }
 
+// Where to go after signing in. Only invitation links are accepted, so a crafted
+// link can't send someone to another site.
+function inviteReturnPath(): string | null {
+	const next = new URLSearchParams(window.location.search).get("next");
+	return next?.startsWith("/invite?token=") ? next : null;
+}
+
 function messageKey(error: AuthError): string {
 	if (error.status === 429) return "auth.too_many";
 	if (error.code === "INVALID_EMAIL_OR_PASSWORD") return "auth.invalid";
@@ -26,7 +33,11 @@ function messageKey(error: AuthError): string {
 export function SignInPage() {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
-	const [email, setEmail] = useState("");
+	const [, navigate] = useLocation();
+	const next = inviteReturnPath();
+	const [email, setEmail] = useState(
+		() => new URLSearchParams(window.location.search).get("email") ?? "",
+	);
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState("");
 	const [unverified, setUnverified] = useState(false);
@@ -49,11 +60,12 @@ export function SignInPage() {
 			setError(t(messageKey(result.error)));
 			return;
 		}
+		if (next) navigate(next, { replace: true });
 		await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
 	}
 
 	async function resend() {
-		await authClient.sendVerificationEmail({ email, callbackURL: "/" });
+		await authClient.sendVerificationEmail({ email, callbackURL: next ?? "/" });
 		setResent(true);
 	}
 
@@ -63,7 +75,7 @@ export function SignInPage() {
 			footer={
 				<>
 					{t("auth.no_account")}{" "}
-					<Link href="/sign-up" className={linkClass}>
+					<Link href={`/sign-up${window.location.search}`} className={linkClass}>
 						{t("auth.sign_up")}
 					</Link>
 				</>
@@ -111,8 +123,11 @@ export function SignInPage() {
 export function SignUpPage() {
 	const { t } = useI18n();
 	const turnstile = useTurnstile();
+	const next = inviteReturnPath();
 	const [name, setName] = useState("");
-	const [email, setEmail] = useState("");
+	const [email, setEmail] = useState(
+		() => new URLSearchParams(window.location.search).get("email") ?? "",
+	);
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -126,7 +141,7 @@ export function SignUpPage() {
 			name: name.trim(),
 			email,
 			password,
-			callbackURL: "/",
+			callbackURL: next ?? "/",
 			fetchOptions: turnstile.fetchOptions,
 		});
 		setSaving(false);
@@ -155,7 +170,7 @@ export function SignUpPage() {
 			footer={
 				<>
 					{t("auth.has_account")}{" "}
-					<Link href="/sign-in" className={linkClass}>
+					<Link href={`/sign-in${window.location.search}`} className={linkClass}>
 						{t("auth.sign_in")}
 					</Link>
 				</>

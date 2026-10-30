@@ -19,13 +19,13 @@ const KEY_LENGTH = 64;
 
 // Runs natively through nodejs_compat, which uses far less Worker CPU than a
 // JavaScript scrypt implementation.
-async function hashPassword(password: string): Promise<string> {
+export async function hashPassword(password: string): Promise<string> {
 	const salt = randomBytes(16);
 	const key = await scryptAsync(password, salt, KEY_LENGTH, SCRYPT);
 	return `${salt.toString("hex")}:${key.toString("hex")}`;
 }
 
-async function verifyPassword({
+export async function verifyPassword({
 	hash,
 	password,
 }: {

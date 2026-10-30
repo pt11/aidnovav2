@@ -8,6 +8,27 @@
       "when": 1793373415114,
       "tag": "0000_foundation",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1793380607538,
+      "tag": "0001_nostalgic_warstar",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793381709168,
+      "tag": "0002_fresh_wendigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793382237377,
+      "tag": "0003_smart_wraith",
+      "breakpoints": true
     }
   ]
 }

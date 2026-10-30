@@ -4,6 +4,7 @@
 //   BASE_URL=http://localhost:5199 npm run test:api
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { before, describe, test } from "node:test";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5173";
@@ -49,6 +50,24 @@ class Client {
 		}
 		const data = await response.json().catch(() => null);
 		return { status: response.status, data };
+	}
+
+	// For routes whose body is a file rather than JSON.
+	async fileRequest(path, { method = "GET", body } = {}) {
+		const headers = {
+			"cf-connecting-ip": this.ip,
+			cookie: [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; "),
+		};
+		if (method !== "GET") headers.origin = BASE;
+		const response = await fetch(`${BASE}${path}`, { method, headers, body });
+		const buffer = Buffer.from(await response.arrayBuffer());
+		let data = null;
+		try {
+			data = JSON.parse(buffer.toString());
+		} catch {
+			// A file, not a JSON message.
+		}
+		return { status: response.status, headers: response.headers, buffer, data };
 	}
 
 	async signUpAndIn(label) {
@@ -318,5 +337,841 @@ describe("organizations and roles", () => {
 		});
 		assert.equal(status, 403);
 		assert.equal(data.code, "BAD_ORIGIN");
+	});
+});
+
+describe("team and workspace", () => {
+	let admin, manager, staff, outsider, orgId, outsiderOrgId;
+	const CURRENT = "/api/organizations/current";
+
+	// Tokens are only ever emailed, so tests give an invitation a known one.
+	function setInviteToken(email, organizationId, token) {
+		const hash = createHash("sha256").update(token).digest("hex");
+		sql(
+			`UPDATE invitations SET token_hash = '${hash}' WHERE email = '${email}' AND organization_id = ${organizationId}`,
+		);
+	}
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("teamadmin");
+		manager = await new Client().signUpAndIn("teammanager");
+		staff = await new Client().signUpAndIn("teamstaff");
+		outsider = await new Client().signUpAndIn("teamoutsider");
+		orgId = (await admin.createOrg("gamma")).data.id;
+		outsiderOrgId = (await outsider.createOrg("delta")).data.id;
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+	});
+
+	test("staff can't manage departments or invitations", async () => {
+		const department = await staff.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "Nope" },
+		});
+		assert.equal(department.status, 403);
+		const invite = await staff.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: `x-${RUN}@example.test`, role: "staff" },
+		});
+		assert.equal(invite.status, 403);
+		assert.equal((await staff.request(`${CURRENT}/invitations`)).status, 403);
+	});
+
+	test("department names are unique within an organization", async () => {
+		const created = await manager.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "Programs" },
+		});
+		assert.equal(created.status, 201);
+		const copy = await admin.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "programs" },
+		});
+		assert.equal(copy.data.code, "DEPARTMENT_EXISTS");
+		const elsewhere = await outsider.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "Programs" },
+		});
+		assert.equal(elsewhere.status, 201);
+	});
+
+	test("departments can't be reached from another organization", async () => {
+		const id = (await admin.request(`${CURRENT}/departments`)).data.departments[0].id;
+		const edit = await outsider.request(`${CURRENT}/departments/${id}`, {
+			method: "PATCH",
+			body: { name: "Hijacked" },
+		});
+		assert.equal(edit.status, 404);
+		const remove = await outsider.request(`${CURRENT}/departments/${id}`, {
+			method: "DELETE",
+		});
+		assert.equal(remove.status, 404);
+		const assign = await outsider.request(
+			`${CURRENT}/members/${outsider.userId}/department`,
+			{ method: "PATCH", body: { departmentId: id } },
+		);
+		assert.equal(assign.data.code, "INVALID_DEPARTMENT");
+		const reach = await outsider.request(
+			`${CURRENT}/members/${staff.userId}/department`,
+			{ method: "PATCH", body: { departmentId: null } },
+		);
+		assert.equal(reach.status, 404);
+	});
+
+	test("deleting a department keeps its members", async () => {
+		const created = await admin.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "Temporary" },
+		});
+		const assign = await manager.request(
+			`${CURRENT}/members/${staff.userId}/department`,
+			{ method: "PATCH", body: { departmentId: created.data.id } },
+		);
+		assert.equal(assign.status, 200);
+		await admin.request(`${CURRENT}/departments/${created.data.id}`, {
+			method: "DELETE",
+		});
+		const { data } = await admin.request(`${CURRENT}/members`);
+		const person = data.members.find((m) => m.userId === staff.userId);
+		assert.equal(person.departmentId, null);
+	});
+
+	test("managers can only invite staff", async () => {
+		const email = `promote-${RUN}@example.test`;
+		const asAdmin = await manager.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email, role: "admin" },
+		});
+		assert.equal(asAdmin.status, 403);
+		const asStaff = await manager.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email, role: "staff" },
+		});
+		assert.equal(asStaff.status, 201);
+	});
+
+	test("managers can't change an invitation an admin sent to a manager", async () => {
+		const email = `lead-${RUN}@example.test`;
+		await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email, role: "manager" },
+		});
+		const overwrite = await manager.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email, role: "staff" },
+		});
+		assert.equal(overwrite.status, 403);
+		const { data } = await admin.request(`${CURRENT}/invitations`);
+		const invite = data.invitations.find((i) => i.email === email);
+		const revoke = await manager.request(`${CURRENT}/invitations/${invite.id}`, {
+			method: "DELETE",
+		});
+		assert.equal(revoke.status, 403);
+		assert.equal(invite.tokenHash, undefined);
+	});
+
+	test("existing members can't be invited, and bad input is refused", async () => {
+		const member = await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: staff.email, role: "staff" },
+		});
+		assert.equal(member.data.code, "ALREADY_MEMBER");
+		const bad = await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: "not-an-email", role: "staff" },
+		});
+		assert.equal(bad.data.code, "INVALID_EMAIL");
+		const role = await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: `r-${RUN}@example.test`, role: "owner" },
+		});
+		assert.equal(role.data.code, "INVALID_ROLE");
+	});
+
+	test("an invitation only works for the invited email, and only once", async () => {
+		const invited = await new Client().signUpAndIn("invited");
+		await admin.request(`${CURRENT}/departments`, {
+			method: "POST",
+			body: { name: "Field" },
+		});
+		const departments = (await admin.request(`${CURRENT}/departments`)).data.departments;
+		const field = departments.find((d) => d.name === "Field");
+		await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: invited.email, role: "manager", departmentId: field.id },
+		});
+		const token = `known-${RUN}`;
+		setInviteToken(invited.email, orgId, token);
+
+		const lookup = await new Client().request(
+			`/api/invitations/lookup?token=${token}`,
+		);
+		assert.equal(lookup.status, 200);
+		assert.equal(lookup.data.email, invited.email);
+		assert.equal(lookup.data.role, "manager");
+
+		const wrongPerson = await outsider.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(wrongPerson.data.code, "WRONG_ACCOUNT");
+		const signedOut = await new Client().request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(signedOut.status, 401);
+		const badToken = await invited.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token: "wrong" },
+		});
+		assert.equal(badToken.status, 404);
+
+		const accepted = await invited.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(accepted.status, 200);
+		const { data } = await invited.request("/api/me");
+		const membership = data.memberships.find((m) => m.organizationId === orgId);
+		assert.equal(membership.role, "manager");
+		const people = await admin.request(`${CURRENT}/members`);
+		const person = people.data.members.find((m) => m.userId === invited.userId);
+		assert.equal(person.departmentId, field.id);
+
+		const again = await invited.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(again.status, 404);
+		const gone = await new Client().request(`/api/invitations/lookup?token=${token}`);
+		assert.equal(gone.status, 404);
+	});
+
+	test("expired and revoked invitations don't work", async () => {
+		const late = await new Client().signUpAndIn("late");
+		await admin.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: late.email, role: "staff" },
+		});
+		const token = `late-${RUN}`;
+		setInviteToken(late.email, orgId, token);
+		sql(`UPDATE invitations SET expires_at = 1000 WHERE email = '${late.email}'`);
+		const lookup = await new Client().request(`/api/invitations/lookup?token=${token}`);
+		assert.equal(lookup.data.expired, true);
+		const expired = await late.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(expired.data.code, "INVITE_EXPIRED");
+
+		const { data } = await admin.request(`${CURRENT}/invitations`);
+		const invite = data.invitations.find((i) => i.email === late.email);
+		const crossOrg = await outsider.request(`${CURRENT}/invitations/${invite.id}`, {
+			method: "DELETE",
+		});
+		assert.equal(crossOrg.status, 404);
+		await admin.request(`${CURRENT}/invitations/${invite.id}`, { method: "DELETE" });
+		const revoked = await late.request("/api/invitations/accept", {
+			method: "POST",
+			body: { token },
+		});
+		assert.equal(revoked.status, 404);
+	});
+
+	test("only admins can deactivate, and the owner and yourself are protected", async () => {
+		const byManager = await manager.request(`${CURRENT}/members/${staff.userId}/status`, {
+			method: "PATCH",
+			body: { isActive: false },
+		});
+		assert.equal(byManager.status, 403);
+		const owner = await admin.request(`${CURRENT}/members/${admin.userId}/status`, {
+			method: "PATCH",
+			body: { isActive: false },
+		});
+		assert.equal(owner.status, 403);
+		const crossOrg = await outsider.request(`${CURRENT}/members/${staff.userId}/status`, {
+			method: "PATCH",
+			body: { isActive: false },
+		});
+		assert.equal(crossOrg.status, 404);
+	});
+
+	test("only admins can edit organization details, with safe links", async () => {
+		const byManager = await manager.request(CURRENT, {
+			method: "PATCH",
+			body: { name: "Renamed" },
+		});
+		assert.equal(byManager.status, 403);
+		const unsafe = await admin.request(CURRENT, {
+			method: "PATCH",
+			body: { name: "Gamma", website: "javascript:alert(1)" },
+		});
+		assert.equal(unsafe.data.code, "INVALID_WEBSITE");
+		const saved = await admin.request(CURRENT, {
+			method: "PATCH",
+			body: { name: "Gamma NGO", website: "https://gamma.example", phone: "123" },
+		});
+		assert.equal(saved.status, 200);
+		const { data } = await staff.request(CURRENT);
+		assert.equal(data.name, "Gamma NGO");
+		assert.equal(data.website, "https://gamma.example");
+	});
+
+	test("profiles only change your own record, with safe links", async () => {
+		const unsafe = await staff.request("/api/me/profile", {
+			method: "PATCH",
+			body: { name: "Staff", facebookLink: "javascript:alert(1)" },
+		});
+		assert.equal(unsafe.data.code, "INVALID_LINK");
+		const saved = await staff.request("/api/me/profile", {
+			method: "PATCH",
+			body: {
+				name: "Renamed Staff",
+				position: "Officer",
+				role: "admin",
+				isSuperAdmin: true,
+			},
+		});
+		assert.equal(saved.status, 200);
+		const { data } = await staff.request("/api/me");
+		assert.equal(data.user.name, "Renamed Staff");
+		assert.equal(data.user.isSuperAdmin, false);
+		const membership = data.memberships.find((m) => m.organizationId === orgId);
+		assert.equal(membership.role, "staff");
+		const profile = await staff.request("/api/me/profile");
+		assert.equal(profile.data.position, "Officer");
+	});
+
+	test("announcements are visible to members and managed by managers", async () => {
+		const byStaff = await staff.request("/api/announcements", {
+			method: "POST",
+			body: { title: "No", content: "No", priority: "normal" },
+		});
+		assert.equal(byStaff.status, 403);
+		const created = await manager.request("/api/announcements", {
+			method: "POST",
+			body: { title: "Hello", content: "Team news", priority: "urgent" },
+		});
+		assert.equal(created.status, 201);
+		const invalid = await manager.request("/api/announcements", {
+			method: "POST",
+			body: { title: "Bad", content: "x", priority: "extreme" },
+		});
+		assert.equal(invalid.status, 400);
+
+		const seen = await staff.request("/api/announcements");
+		assert.equal(seen.data.announcements[0].title, "Hello");
+		const hidden = await outsider.request("/api/announcements");
+		assert.equal(hidden.data.announcements.length, 0);
+
+		const id = created.data.id;
+		const edit = await outsider.request(`/api/announcements/${id}`, {
+			method: "PATCH",
+			body: { title: "Hacked", content: "x", priority: "normal" },
+		});
+		assert.equal(edit.status, 404);
+		const remove = await outsider.request(`/api/announcements/${id}`, {
+			method: "DELETE",
+		});
+		assert.equal(remove.status, 404);
+		const staffRemove = await staff.request(`/api/announcements/${id}`, {
+			method: "DELETE",
+		});
+		assert.equal(staffRemove.status, 403);
+		assert.equal(
+			(await manager.request(`/api/announcements/${id}`, { method: "DELETE" })).status,
+			200,
+		);
+	});
+
+	test("the dashboard only counts this organization", async () => {
+		const { data } = await outsider.request("/api/dashboard");
+		assert.equal(data.members, 1);
+		assert.equal(data.announcements, 0);
+		assert.equal(data.departments, 1);
+		assert.ok(outsiderOrgId);
+	});
+});
+
+describe("policies", () => {
+	let admin, manager, programs, finance, unassigned, outsider, orgId;
+	let programsId, financeId;
+	const CURRENT = "/api/organizations/current";
+	const draft = (extra = {}) => ({
+		title: "Code of Conduct",
+		category: "General",
+		content: "Treat people with respect.",
+		status: "published",
+		isMandatory: true,
+		effectiveDate: "2026-11-01",
+		reviewDate: "",
+		departmentIds: [],
+		...extra,
+	});
+	const create = async (extra) =>
+		(await admin.request("/api/policies", { method: "POST", body: draft(extra) })).data.id;
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("poladmin");
+		manager = await new Client().signUpAndIn("polmanager");
+		programs = await new Client().signUpAndIn("polprograms");
+		finance = await new Client().signUpAndIn("polfinance");
+		unassigned = await new Client().signUpAndIn("polnone");
+		outsider = await new Client().signUpAndIn("polout");
+		orgId = (await admin.createOrg("epsilon")).data.id;
+		await outsider.createOrg("zeta");
+		addMember(manager.userId, orgId, "manager");
+		addMember(programs.userId, orgId, "staff");
+		addMember(finance.userId, orgId, "staff");
+		addMember(unassigned.userId, orgId, "staff");
+		programsId = (
+			await admin.request(`${CURRENT}/departments`, { method: "POST", body: { name: "Programs" } })
+		).data.id;
+		financeId = (
+			await admin.request(`${CURRENT}/departments`, { method: "POST", body: { name: "Finance" } })
+		).data.id;
+		for (const [client, departmentId] of [[programs, programsId], [finance, financeId]]) {
+			await admin.request(`${CURRENT}/members/${client.userId}/department`, {
+				method: "PATCH",
+				body: { departmentId },
+			});
+		}
+	});
+
+	test("only managers can create policies, with valid details", async () => {
+		const byStaff = await programs.request("/api/policies", { method: "POST", body: draft() });
+		assert.equal(byStaff.status, 403);
+		const bad = await admin.request("/api/policies", {
+			method: "POST",
+			body: draft({ category: "Nonsense" }),
+		});
+		assert.equal(bad.status, 400);
+		const badDate = await admin.request("/api/policies", {
+			method: "POST",
+			body: draft({ effectiveDate: "soon" }),
+		});
+		assert.equal(badDate.status, 400);
+	});
+
+	test("drafts and archived policies are hidden from staff", async () => {
+		const id = await create({ title: "Secret draft", status: "draft" });
+		const list = await programs.request("/api/policies");
+		assert.ok(!list.data.policies.some((p) => p.id === id));
+		assert.equal((await programs.request(`/api/policies/${id}`)).status, 404);
+		assert.equal((await manager.request(`/api/policies/${id}`)).status, 200);
+		await admin.request(`/api/policies/${id}`, {
+			method: "PATCH",
+			body: draft({ title: "Secret draft", status: "archived" }),
+		});
+		assert.equal((await programs.request(`/api/policies/${id}`)).status, 404);
+	});
+
+	test("department limits apply to reading and acknowledging", async () => {
+		const id = await create({ title: "Programs only", departmentIds: [programsId] });
+		assert.equal((await programs.request(`/api/policies/${id}`)).status, 200);
+		assert.equal((await finance.request(`/api/policies/${id}`)).status, 404);
+		assert.equal((await unassigned.request(`/api/policies/${id}`)).status, 404);
+		assert.equal((await manager.request(`/api/policies/${id}`)).status, 200);
+		const listed = await finance.request("/api/policies");
+		assert.ok(!listed.data.policies.some((p) => p.id === id));
+		const ack = await finance.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(ack.status, 404);
+	});
+
+	test("other organizations can't reach a policy", async () => {
+		const id = await create({ title: "Private" });
+		assert.equal((await outsider.request(`/api/policies/${id}`)).status, 404);
+		const edit = await outsider.request(`/api/policies/${id}`, { method: "PATCH", body: draft() });
+		assert.equal(edit.status, 404);
+		assert.equal((await outsider.request(`/api/policies/${id}`, { method: "DELETE" })).status, 404);
+		const ack = await outsider.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(ack.status, 404);
+		assert.equal((await outsider.request(`/api/policies/${id}/compliance`)).status, 404);
+		const remind = await outsider.request(`/api/policies/${id}/remind`, { method: "POST", body: {} });
+		assert.equal(remind.status, 404);
+		const foreign = await outsider.request("/api/policies", {
+			method: "POST",
+			body: draft({ departmentIds: [programsId] }),
+		});
+		assert.equal(foreign.data.code, "INVALID_DEPARTMENT");
+	});
+
+	test("rewording a published policy needs a new acknowledgment", async () => {
+		const id = await create({ title: "Versioned" });
+		const stale = await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 99 },
+		});
+		assert.equal(stale.data.code, "POLICY_CHANGED");
+		const ack = await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(ack.status, 200);
+		const twice = await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(twice.status, 200);
+		assert.ok((await programs.request(`/api/policies/${id}`)).data.acknowledgedAt);
+
+		const sameWords = await admin.request(`/api/policies/${id}`, {
+			method: "PATCH",
+			body: draft({ title: "Versioned", reviewDate: "2027-01-01" }),
+		});
+		assert.equal(sameWords.data.version, 1);
+		assert.ok((await programs.request(`/api/policies/${id}`)).data.acknowledgedAt);
+
+		const reworded = await admin.request(`/api/policies/${id}`, {
+			method: "PATCH",
+			body: draft({ title: "Versioned", content: "New wording." }),
+		});
+		assert.equal(reworded.data.version, 2);
+		const after = await programs.request(`/api/policies/${id}`);
+		assert.equal(after.data.acknowledgedAt, null);
+		const old = await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(old.data.code, "POLICY_CHANGED");
+	});
+
+	test("draft edits don't create versions", async () => {
+		const id = await create({ title: "Drafting", status: "draft" });
+		const edited = await admin.request(`/api/policies/${id}`, {
+			method: "PATCH",
+			body: draft({ title: "Drafting 2", content: "Changed", status: "draft" }),
+		});
+		assert.equal(edited.data.version, 1);
+		const ack = await admin.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		assert.equal(ack.data.code, "NOT_PUBLISHED");
+	});
+
+	test("compliance counts the right people, for managers only", async () => {
+		const id = await create({ title: "Finance rule", departmentIds: [financeId] });
+		assert.equal((await finance.request(`/api/policies/${id}/compliance`)).status, 403);
+		const before = await manager.request(`/api/policies/${id}/compliance`);
+		assert.deepEqual(before.data.people.map((p) => p.userId), [finance.userId]);
+		await finance.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		const { data } = await manager.request("/api/policies");
+		const row = data.policies.find((p) => p.id === id);
+		assert.deepEqual(row.compliance, { total: 1, acknowledged: 1 });
+		const staffView = await finance.request("/api/policies");
+		assert.equal(staffView.data.policies.find((p) => p.id === id).compliance, null);
+	});
+
+	test("reminders go to pending people, once a day, for mandatory policies", async () => {
+		const optional = await create({ title: "Optional", isMandatory: false });
+		const refused = await admin.request(`/api/policies/${optional}/remind`, { method: "POST", body: {} });
+		assert.equal(refused.data.code, "NOT_REMINDABLE");
+
+		const id = await create({ title: "Remind me", departmentIds: [programsId, financeId] });
+		assert.equal(
+			(await programs.request(`/api/policies/${id}/remind`, { method: "POST", body: {} })).status,
+			403,
+		);
+		await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		const first = await manager.request(`/api/policies/${id}/remind`, { method: "POST", body: {} });
+		assert.deepEqual(first.data, { sent: 1, failed: 0, skipped: 0, remaining: 0 });
+		const again = await manager.request(`/api/policies/${id}/remind`, { method: "POST", body: {} });
+		assert.deepEqual(again.data, { sent: 0, failed: 0, skipped: 1, remaining: 0 });
+		const { data } = await manager.request(`/api/policies/${id}/compliance`);
+		assert.ok(data.people.find((p) => p.userId === finance.userId).remindedAt);
+	});
+
+	test("the dashboard lists only what this person still has to acknowledge", async () => {
+		const id = await create({ title: "Dashboard rule", departmentIds: [programsId] });
+		const mine = await programs.request("/api/dashboard");
+		assert.ok(mine.data.pendingPolicies.some((p) => p.id === id));
+		const notMine = await finance.request("/api/dashboard");
+		assert.ok(!notMine.data.pendingPolicies.some((p) => p.id === id));
+		await programs.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		const after = await programs.request("/api/dashboard");
+		assert.ok(!after.data.pendingPolicies.some((p) => p.id === id));
+	});
+
+	test("only managers can delete", async () => {
+		const id = await create({ title: "Delete me" });
+		assert.equal((await programs.request(`/api/policies/${id}`, { method: "DELETE" })).status, 403);
+		assert.equal((await manager.request(`/api/policies/${id}`, { method: "DELETE" })).status, 200);
+		assert.equal((await manager.request(`/api/policies/${id}`)).status, 404);
+	});
+});
+
+describe("files", () => {
+	let admin, manager, programs, finance, outsider, orgId, programsId, financeId;
+	const CURRENT = "/api/organizations/current";
+	const upload = (client, name, content = "hello", folderId) => {
+		const query = new URLSearchParams({ name });
+		if (folderId) query.set("folderId", String(folderId));
+		return client.fileRequest(`/api/files/upload?${query}`, {
+			method: "POST",
+			body: Buffer.from(content),
+		});
+	};
+	const patchFile = (client, id, body) =>
+		client.request(`/api/files/${id}`, { method: "PATCH", body: { name: "file.pdf", ...body } });
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("fileadmin");
+		manager = await new Client().signUpAndIn("filemanager");
+		programs = await new Client().signUpAndIn("fileprograms");
+		finance = await new Client().signUpAndIn("filefinance");
+		outsider = await new Client().signUpAndIn("fileout");
+		orgId = (await admin.createOrg("eta")).data.id;
+		await outsider.createOrg("theta");
+		addMember(manager.userId, orgId, "manager");
+		addMember(programs.userId, orgId, "staff");
+		addMember(finance.userId, orgId, "staff");
+		programsId = (
+			await admin.request(`${CURRENT}/departments`, { method: "POST", body: { name: "Programs" } })
+		).data.id;
+		financeId = (
+			await admin.request(`${CURRENT}/departments`, { method: "POST", body: { name: "Finance" } })
+		).data.id;
+		for (const [client, departmentId] of [[programs, programsId], [finance, financeId]]) {
+			await admin.request(`${CURRENT}/members/${client.userId}/department`, {
+				method: "PATCH",
+				body: { departmentId },
+			});
+		}
+	});
+
+	test("uploads round-trip, and staff can't upload", async () => {
+		const created = await upload(manager, "report.pdf", "pdf-bytes");
+		assert.equal(created.status, 201);
+		const download = await programs.fileRequest(`/api/files/${created.data.id}/download`);
+		assert.equal(download.status, 200);
+		assert.equal(download.buffer.toString(), "pdf-bytes");
+		assert.equal((await upload(programs, "no.pdf")).status, 403);
+		const { data } = await programs.request("/api/files");
+		const file = data.files.find((f) => f.id === created.data.id);
+		assert.equal(file.mimeType, "application/pdf");
+		assert.equal(file.sizeBytes, 9);
+		assert.equal(file.storageKey, undefined);
+		assert.equal(file.pinHash, undefined);
+	});
+
+	test("unsafe file types are refused, whatever the browser claims", async () => {
+		for (const name of ["page.html", "image.svg", "script.js", "app.exe", "noextension"]) {
+			const { data } = await upload(admin, name, "<script>alert(1)</script>");
+			assert.equal(data.code, "TYPE_NOT_ALLOWED", name);
+		}
+		const empty = await admin.fileRequest("/api/files/upload?name=empty.pdf", {
+			method: "POST",
+			body: Buffer.alloc(0),
+		});
+		assert.equal(empty.data.code, "EMPTY_FILE");
+	});
+
+	test("files are too large above 50 MB", async () => {
+		const big = await upload(admin, "big.zip", Buffer.alloc(50 * 1024 * 1024 + 1));
+		assert.equal(big.data.code, "FILE_TOO_LARGE");
+	});
+
+	test("downloads can't run in the browser", async () => {
+		const created = await upload(admin, "note.txt", "<script>alert(1)</script>");
+		const { headers } = await programs.fileRequest(`/api/files/${created.data.id}/download?inline=1`);
+		assert.match(headers.get("content-disposition"), /^attachment/);
+		assert.equal(headers.get("x-content-type-options"), "nosniff");
+		assert.match(headers.get("content-security-policy"), /sandbox/);
+		assert.match(headers.get("cache-control"), /no-store/);
+		const pdf = await upload(admin, "doc.pdf", "%PDF");
+		const preview = await programs.fileRequest(`/api/files/${pdf.data.id}/download?inline=1`);
+		assert.match(preview.headers.get("content-disposition"), /^inline/);
+	});
+
+	test("other organizations can't reach files or folders", async () => {
+		const { data: file } = await upload(admin, "private.pdf");
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Private" },
+		});
+		assert.equal((await outsider.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+		assert.equal((await patchFile(outsider, file.id, {})).status, 404);
+		assert.equal((await outsider.request(`/api/files/${file.id}`, { method: "DELETE" })).status, 404);
+		const listed = await outsider.request("/api/files");
+		assert.ok(!listed.data.files.some((f) => f.id === file.id));
+		const folders = await outsider.request("/api/folders");
+		assert.ok(!folders.data.folders.some((f) => f.id === folder.id));
+		const intoForeign = await upload(outsider, "x.pdf", "x", folder.id);
+		assert.equal(intoForeign.data.code, "INVALID_FOLDER");
+		assert.equal((await outsider.request(`/api/folders/${folder.id}`, { method: "DELETE" })).status, 404);
+		const signedOut = await new Client().fileRequest(`/api/files/${file.id}/download`);
+		assert.equal(signedOut.status, 401);
+	});
+
+	test("department limits apply to files and folders", async () => {
+		const { data: file } = await upload(admin, "file.pdf");
+		await patchFile(admin, file.id, { departmentIds: [programsId] });
+		assert.equal((await programs.fileRequest(`/api/files/${file.id}/download`)).status, 200);
+		assert.equal((await finance.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+		assert.ok(!(await finance.request("/api/files")).data.files.some((f) => f.id === file.id));
+
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Programs only", departmentIds: [programsId] },
+		});
+		const { data: inside } = await upload(admin, "inside.pdf", "x", folder.id);
+		assert.equal((await programs.fileRequest(`/api/files/${inside.id}/download`)).status, 200);
+		assert.equal((await finance.fileRequest(`/api/files/${inside.id}/download`)).status, 404);
+		assert.ok(!(await finance.request("/api/folders")).data.folders.some((f) => f.id === folder.id));
+	});
+
+	test("a folder with files can't be deleted, so nothing loses protection", async () => {
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Full", departmentIds: [programsId] },
+		});
+		const { data: file } = await upload(admin, "kept.pdf", "x", folder.id);
+		const refused = await admin.request(`/api/folders/${folder.id}`, { method: "DELETE" });
+		assert.equal(refused.data.code, "FOLDER_NOT_EMPTY");
+		assert.equal((await finance.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+		await admin.request(`/api/files/${file.id}`, { method: "DELETE" });
+		assert.equal((await admin.request(`/api/folders/${folder.id}`, { method: "DELETE" })).status, 200);
+	});
+
+	test("moving a file out of a folder keeps its protection", async () => {
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Locked", departmentIds: [programsId], pin: "1234" },
+		});
+		const { data: file } = await upload(admin, "file.pdf", "x", folder.id);
+		await patchFile(admin, file.id, { folderId: null });
+		assert.equal((await finance.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+		const blocked = await programs.fileRequest(`/api/files/${file.id}/download`);
+		assert.equal(blocked.data.code, "PIN_REQUIRED");
+	});
+
+	test("PINs protect files and links, and are never returned", async () => {
+		const { data: file } = await upload(admin, "file.pdf", "secret");
+		const bad = await patchFile(admin, file.id, { pin: "12" });
+		assert.equal(bad.data.code, "INVALID_PIN");
+		await patchFile(admin, file.id, { pin: "4321" });
+
+		const row = (await programs.request("/api/files")).data.files.find((f) => f.id === file.id);
+		assert.equal(row.pinProtected, true);
+		assert.equal(row.pinHash, undefined);
+		assert.equal((await programs.fileRequest(`/api/files/${file.id}/download`)).data.code, "PIN_REQUIRED");
+		const wrong = await programs.request(`/api/files/${file.id}/unlock`, { method: "POST", body: { pin: "0000" } });
+		assert.equal(wrong.data.code, "WRONG_PIN");
+		const { data: unlock } = await programs.request(`/api/files/${file.id}/unlock`, {
+			method: "POST",
+			body: { pin: "4321" },
+		});
+		const opened = await programs.fileRequest(`/api/files/${file.id}/download?unlock=${unlock.token}`);
+		assert.equal(opened.buffer.toString(), "secret");
+
+		const stolen = await finance.fileRequest(`/api/files/${file.id}/download?unlock=${unlock.token}`);
+		assert.equal(stolen.data.code, "PIN_REQUIRED");
+		const forged = await programs.fileRequest(`/api/files/${file.id}/download?unlock=9999999999999.abc`);
+		assert.equal(forged.data.code, "PIN_REQUIRED");
+
+		await patchFile(admin, file.id, { pin: "9999" });
+		const stale = await programs.fileRequest(`/api/files/${file.id}/download?unlock=${unlock.token}`);
+		assert.equal(stale.data.code, "PIN_REQUIRED");
+		await patchFile(admin, file.id, { pin: null });
+		assert.equal((await programs.fileRequest(`/api/files/${file.id}/download`)).status, 200);
+
+		const { data: link } = await admin.request("/api/files/link", {
+			method: "POST",
+			body: { name: "Drive", url: "https://example.test/secret" },
+		});
+		await patchFile(admin, link.id, { name: "Drive", pin: "5555" });
+		const linkRow = (await programs.request("/api/files")).data.files.find((f) => f.id === link.id);
+		assert.equal(linkRow.url, null);
+		assert.equal((await programs.request(`/api/files/${link.id}/open-link`)).data.code, "PIN_REQUIRED");
+		const { data: linkUnlock } = await programs.request(`/api/files/${link.id}/unlock`, {
+			method: "POST",
+			body: { pin: "5555" },
+		});
+		const revealed = await programs.request(`/api/files/${link.id}/open-link?unlock=${linkUnlock.token}`);
+		assert.equal(revealed.data.url, "https://example.test/secret");
+	});
+
+	test("a folder PIN covers its files with one unlock", async () => {
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Pinned", pin: "2468" },
+		});
+		const { data: first } = await upload(admin, "one.pdf", "1", folder.id);
+		const { data: second } = await upload(admin, "two.pdf", "2", folder.id);
+		const { data: unlock } = await programs.request(`/api/files/${first.id}/unlock`, {
+			method: "POST",
+			body: { pin: "2468" },
+		});
+		assert.equal(unlock.pinScope, `folder:${folder.id}`);
+		const other = await programs.fileRequest(`/api/files/${second.id}/download?unlock=${unlock.token}`);
+		assert.equal(other.buffer.toString(), "2");
+		const folders = (await programs.request("/api/folders")).data.folders;
+		const row = folders.find((f) => f.id === folder.id);
+		assert.equal(row.pinProtected, true);
+		assert.equal(row.pinHash, undefined);
+	});
+
+	test("repeated wrong PINs are blocked, even with the right one", async () => {
+		const guesser = await new Client().signUpAndIn("fileguesser");
+		addMember(guesser.userId, orgId, "staff");
+		const { data: file } = await upload(admin, "file.pdf");
+		await patchFile(admin, file.id, { pin: "7777" });
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const wrong = await guesser.request(`/api/files/${file.id}/unlock`, {
+				method: "POST",
+				body: { pin: "0000" },
+			});
+			assert.equal(wrong.data.code, "WRONG_PIN");
+		}
+		const blocked = await guesser.request(`/api/files/${file.id}/unlock`, {
+			method: "POST",
+			body: { pin: "7777" },
+		});
+		assert.equal(blocked.status, 429);
+		const others = await programs.request(`/api/files/${file.id}/unlock`, {
+			method: "POST",
+			body: { pin: "7777" },
+		});
+		assert.equal(others.status, 200);
+	});
+
+	test("links must be web addresses", async () => {
+		for (const url of ["javascript:alert(1)", "data:text/html,x", "not a url"]) {
+			const { data } = await admin.request("/api/files/link", {
+				method: "POST",
+				body: { name: "Bad", url },
+			});
+			assert.equal(data.code, "INVALID_LINK", url);
+		}
+	});
+
+	test("deleting a file removes it, for managers only", async () => {
+		const { data: file } = await upload(admin, "gone.pdf", "x");
+		assert.equal((await programs.request(`/api/files/${file.id}`, { method: "DELETE" })).status, 403);
+		assert.equal((await manager.request(`/api/files/${file.id}`, { method: "DELETE" })).status, 200);
+		assert.equal((await admin.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+	});
+
+	test("storage usage is for managers, and only counts this organization", async () => {
+		assert.equal((await programs.request("/api/files/usage")).status, 403);
+		const { data } = await outsider.request("/api/files/usage");
+		assert.equal(data.usedBytes, 0);
+		assert.equal(data.limitBytes, 5 * 1024 * 1024 * 1024);
 	});
 });

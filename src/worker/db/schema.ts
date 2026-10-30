@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
 	index,
 	integer,
+	primaryKey,
 	sqliteTable,
 	text,
 	uniqueIndex,
@@ -175,6 +176,245 @@ export const userProfiles = sqliteTable(
 			table.userId,
 			table.organizationId,
 		),
+	],
+);
+
+// Only pending invitations exist: accepting or revoking one deletes it. The
+// token is emailed once and only its hash is stored.
+export const invitations = sqliteTable(
+	"invitations",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		email: text("email").notNull(),
+		role: text("role", { enum: ["staff", "manager", "admin"] })
+			.notNull()
+			.default("staff"),
+		departmentId: integer("department_id").references(() => departments.id, {
+			onDelete: "set null",
+		}),
+		tokenHash: text("token_hash").notNull().unique(),
+		invitedBy: text("invited_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		uniqueIndex("invitations_org_email_unique").on(
+			table.organizationId,
+			table.email,
+		),
+	],
+);
+
+export const announcements = sqliteTable(
+	"announcements",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		title: text("title").notNull(),
+		content: text("content").notNull(),
+		priority: text("priority", { enum: ["normal", "high", "urgent"] })
+			.notNull()
+			.default("normal"),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: createdAt(),
+	},
+	(table) => [index("announcements_org_idx").on(table.organizationId)],
+);
+
+export const policies = sqliteTable(
+	"policies",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		title: text("title").notNull(),
+		category: text("category").notNull(),
+		content: text("content").notNull(),
+		status: text("status", { enum: ["draft", "published", "archived"] })
+			.notNull()
+			.default("draft"),
+		isMandatory: integer("is_mandatory", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		effectiveDate: integer("effective_date", { mode: "timestamp_ms" }),
+		reviewDate: integer("review_date", { mode: "timestamp_ms" }),
+		version: integer("version").notNull().default(1),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: createdAt(),
+		updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+			.notNull()
+			.default(sql`(unixepoch() * 1000)`),
+	},
+	(table) => [index("policies_org_idx").on(table.organizationId)],
+);
+
+// One row per person per version, so a reworded policy needs a new acknowledgment
+// while the record of earlier ones is kept.
+export const policyAcknowledgments = sqliteTable(
+	"policy_acknowledgments",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		policyId: integer("policy_id")
+			.notNull()
+			.references(() => policies.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		policyVersion: integer("policy_version").notNull().default(1),
+		acknowledgedAt: integer("acknowledged_at", { mode: "timestamp_ms" })
+			.notNull()
+			.default(sql`(unixepoch() * 1000)`),
+	},
+	(table) => [
+		uniqueIndex("policy_acks_unique").on(
+			table.policyId,
+			table.userId,
+			table.policyVersion,
+		),
+		index("policy_acks_user_idx").on(table.userId),
+	],
+);
+
+export const policyReminderLog = sqliteTable(
+	"policy_reminder_log",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		policyId: integer("policy_id")
+			.notNull()
+			.references(() => policies.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		sentBy: text("sent_by").references(() => user.id, { onDelete: "set null" }),
+		sentAt: integer("sent_at", { mode: "timestamp_ms" })
+			.notNull()
+			.default(sql`(unixepoch() * 1000)`),
+	},
+	(table) => [index("policy_reminders_policy_idx").on(table.policyId)],
+);
+
+export const policyAccessDepartments = sqliteTable(
+	"policy_access_departments",
+	{
+		policyId: integer("policy_id")
+			.notNull()
+			.references(() => policies.id, { onDelete: "cascade" }),
+		departmentId: integer("department_id")
+			.notNull()
+			.references(() => departments.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.policyId, table.departmentId] })],
+);
+
+// Column names follow v1. Inside a folder, only the folder's PIN and department
+// rules apply.
+export const hubFolders = sqliteTable(
+	"hub_folders",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		pinHash: text("pin_hash"),
+		createdAt: createdAt(),
+	},
+	(table) => [index("hub_folders_org_idx").on(table.organizationId)],
+);
+
+export const folderAccessDepartments = sqliteTable(
+	"folder_access_departments",
+	{
+		folderId: integer("folder_id")
+			.notNull()
+			.references(() => hubFolders.id, { onDelete: "cascade" }),
+		departmentId: integer("department_id")
+			.notNull()
+			.references(() => departments.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.folderId, table.departmentId] })],
+);
+
+export const orgFiles = sqliteTable(
+	"org_files",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		storageKey: text("storage_key"),
+		// Only links have a url. Uploads are served through the download route.
+		url: text("url"),
+		name: text("name").notNull(),
+		mimeType: text("mime_type"),
+		sizeBytes: integer("size_bytes"),
+		fileType: text("file_type", { enum: ["upload", "link"] })
+			.notNull()
+			.default("upload"),
+		uploadedBy: text("uploaded_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		pinHash: text("pin_hash"),
+		folderId: integer("folder_id").references(() => hubFolders.id),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		index("org_files_org_idx").on(table.organizationId),
+		index("org_files_folder_idx").on(table.folderId),
+	],
+);
+
+export const fileAccessDepartments = sqliteTable(
+	"file_access_departments",
+	{
+		fileId: integer("file_id")
+			.notNull()
+			.references(() => orgFiles.id, { onDelete: "cascade" }),
+		departmentId: integer("department_id")
+			.notNull()
+			.references(() => departments.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.fileId, table.departmentId] })],
+);
+
+export const fileAccessLog = sqliteTable(
+	"file_access_log",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		orgFileId: integer("org_file_id")
+			.notNull()
+			.references(() => orgFiles.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		action: text("action", { enum: ["view", "download", "pin_failed"] })
+			.notNull()
+			.default("view"),
+		accessedAt: integer("accessed_at", { mode: "timestamp_ms" })
+			.notNull()
+			.default(sql`(unixepoch() * 1000)`),
+	},
+	(table) => [
+		index("file_access_log_org_idx").on(table.organizationId),
+		index("file_access_log_user_idx").on(table.userId, table.action),
 	],
 );
 
