@@ -16,7 +16,7 @@
 	"vars": {
 		"ENVIRONMENT": "production",
 		"HUB_URL": "https://hub.aidnova.app",
-		"EMAIL_FROM": "no-reply@aidnova.app",
+		"EMAIL_FROM": "no-reply@hub.aidnova.app",
 		"TURNSTILE_SITE_KEY": "0x4AAAAAAFs5K0qsA1RFg7wH"
 	},
 	"send_email": [
