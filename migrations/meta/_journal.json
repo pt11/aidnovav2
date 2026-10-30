@@ -29,6 +29,13 @@
       "when": 1793382237377,
       "tag": "0003_smart_wraith",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793383933320,
+      "tag": "0004_far_vivisector",
+      "breakpoints": true
     }
   ]
 }

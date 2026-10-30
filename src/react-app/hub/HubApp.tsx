@@ -20,6 +20,7 @@ import { AnnouncementsPage } from "./pages/Announcements";
 import { CreateOrganizationPage } from "./pages/CreateOrganization";
 import { DashboardPage } from "./pages/Dashboard";
 import { FilesPage } from "./pages/Files";
+import { HubPage } from "./pages/Hub";
 import { InvitePage } from "./pages/Invite";
 import { MyProfilePage } from "./pages/MyProfile";
 import { PoliciesPage } from "./pages/Policies";
@@ -187,7 +188,7 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<DashboardPage me={me} org={org} />
 				</Route>
 				<Route path="/hub">
-					<LaterPage labelKey="nav.hub" />
+					<HubPage />
 				</Route>
 				<Route path="/policies">
 					<PoliciesPage canManage={manager} />

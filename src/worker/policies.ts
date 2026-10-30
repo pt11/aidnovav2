@@ -188,6 +188,43 @@ export async function pendingPoliciesFor(
 	});
 }
 
+// Published policies this person can read. Drafts stay out even for managers,
+// because they aren't official yet.
+export async function readablePublishedPolicies(
+	db: Db,
+	org: Membership,
+	departmentId: number | null,
+) {
+	const [rows, access] = await Promise.all([
+		db
+			.select({
+				id: policies.id,
+				title: policies.title,
+				category: policies.category,
+				content: policies.content,
+				version: policies.version,
+				status: policies.status,
+			})
+			.from(policies)
+			.where(
+				and(
+					eq(policies.organizationId, org.organizationId),
+					eq(policies.status, "published"),
+				),
+			)
+			.orderBy(desc(policies.updatedAt)),
+		loadAccess(db, org.organizationId),
+	]);
+	return rows.filter((policy) =>
+		canRead(
+			policy,
+			(access.get(policy.id) ?? []).map((department) => department.id),
+			org,
+			departmentId,
+		),
+	);
+}
+
 function parseDate(value: unknown): Date | null | undefined {
 	if (value === null || value === undefined || value === "") return null;
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {

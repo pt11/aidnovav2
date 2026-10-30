@@ -260,6 +260,68 @@ function contentDisposition(type: "inline" | "attachment", name: string) {
 	return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }
 
+// Every file this person can see, without anything that must stay private.
+export async function listVisibleFiles(
+	db: Db,
+	org: Membership,
+	departmentId: number | null,
+) {
+	const [rows, folders, foldersAccess, filesAccess] = await Promise.all([
+		db
+			.select({
+				id: orgFiles.id,
+				name: orgFiles.name,
+				fileType: orgFiles.fileType,
+				mimeType: orgFiles.mimeType,
+				sizeBytes: orgFiles.sizeBytes,
+				url: orgFiles.url,
+				folderId: orgFiles.folderId,
+				pinHash: orgFiles.pinHash,
+				createdAt: orgFiles.createdAt,
+				uploaderName: user.name,
+			})
+			.from(orgFiles)
+			.leftJoin(user, eq(orgFiles.uploadedBy, user.id))
+			.where(eq(orgFiles.organizationId, org.organizationId))
+			.orderBy(desc(orgFiles.createdAt), desc(orgFiles.id)),
+		db
+			.select({ id: hubFolders.id, pinHash: hubFolders.pinHash })
+			.from(hubFolders)
+			.where(eq(hubFolders.organizationId, org.organizationId)),
+		folderAccess(db, org.organizationId),
+		fileAccess(db, org.organizationId),
+	]);
+	const folderPins = new Map(folders.map((folder) => [folder.id, folder.pinHash]));
+	return rows.flatMap(({ pinHash, url, ...file }) => {
+		const allowed = file.folderId
+			? (foldersAccess.get(file.folderId) ?? [])
+			: (filesAccess.get(file.id) ?? []);
+		if (
+			!canAccessDepartments(
+				org,
+				allowed.map((department) => department.id),
+				departmentId,
+			)
+		) {
+			return [];
+		}
+		const effectivePin = file.folderId
+			? (folderPins.get(file.folderId) ?? null)
+			: pinHash;
+		return [
+			{
+				...file,
+				departments: file.folderId ? [] : allowed,
+				pinProtected: effectivePin !== null,
+				pinScope: file.folderId ? `folder:${file.folderId}` : `file:${file.id}`,
+				canPreview: PREVIEW_TYPES.has(file.mimeType ?? ""),
+				// A protected link's address stays hidden until the PIN is entered.
+				url: effectivePin === null ? url : null,
+			},
+		];
+	});
+}
+
 export const fileRoutes = new Hono<AppEnv>();
 
 fileRoutes.get("/folders", requireUser, requireOrg, async (c) => {
@@ -443,64 +505,8 @@ fileRoutes.delete(
 fileRoutes.get("/files", requireUser, requireOrg, async (c) => {
 	const db = c.get("db");
 	const org = c.get("org");
-	const [rows, folders, foldersAccess, filesAccess, departmentId] =
-		await Promise.all([
-			db
-				.select({
-					id: orgFiles.id,
-					name: orgFiles.name,
-					fileType: orgFiles.fileType,
-					mimeType: orgFiles.mimeType,
-					sizeBytes: orgFiles.sizeBytes,
-					url: orgFiles.url,
-					folderId: orgFiles.folderId,
-					pinHash: orgFiles.pinHash,
-					createdAt: orgFiles.createdAt,
-					uploaderName: user.name,
-				})
-				.from(orgFiles)
-				.leftJoin(user, eq(orgFiles.uploadedBy, user.id))
-				.where(eq(orgFiles.organizationId, org.organizationId))
-				.orderBy(desc(orgFiles.createdAt), desc(orgFiles.id)),
-			db
-				.select({ id: hubFolders.id, pinHash: hubFolders.pinHash })
-				.from(hubFolders)
-				.where(eq(hubFolders.organizationId, org.organizationId)),
-			folderAccess(db, org.organizationId),
-			fileAccess(db, org.organizationId),
-			getOwnDepartmentId(db, org, c.get("user").id),
-		]);
-	const folderPins = new Map(folders.map((folder) => [folder.id, folder.pinHash]));
-	return c.json({
-		files: rows.flatMap(({ pinHash, url, ...file }) => {
-			const allowed = file.folderId
-				? (foldersAccess.get(file.folderId) ?? [])
-				: (filesAccess.get(file.id) ?? []);
-			if (
-				!canAccessDepartments(
-					org,
-					allowed.map((department) => department.id),
-					departmentId,
-				)
-			) {
-				return [];
-			}
-			const effectivePin = file.folderId
-				? (folderPins.get(file.folderId) ?? null)
-				: pinHash;
-			return [
-				{
-					...file,
-					departments: file.folderId ? [] : allowed,
-					pinProtected: effectivePin !== null,
-					pinScope: file.folderId ? `folder:${file.folderId}` : `file:${file.id}`,
-					canPreview: PREVIEW_TYPES.has(file.mimeType ?? ""),
-					// A protected link's address stays hidden until the PIN is entered.
-					url: effectivePin === null ? url : null,
-				},
-			];
-		}),
-	});
+	const departmentId = await getOwnDepartmentId(db, org, c.get("user").id);
+	return c.json({ files: await listVisibleFiles(db, org, departmentId) });
 });
 
 fileRoutes.get(

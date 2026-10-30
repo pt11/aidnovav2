@@ -418,6 +418,25 @@ export const fileAccessLog = sqliteTable(
 	],
 );
 
+// Counts questions for the daily limits. Their text is never stored.
+export const assistantUsage = sqliteTable(
+	"assistant_usage",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		index("assistant_usage_org_idx").on(table.organizationId, table.createdAt),
+		index("assistant_usage_user_idx").on(table.userId, table.createdAt),
+	],
+);
+
 export const auditLog = sqliteTable(
 	"audit_log",
 	{

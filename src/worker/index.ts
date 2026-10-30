@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { assistantRoutes } from "./assistant";
 import { createAuth } from "./auth";
 import { requireSameOrigin, withDb, type AppEnv } from "./middleware";
 import { fileRoutes } from "./files";
@@ -19,6 +20,7 @@ app.route("/api", team);
 app.route("/api", workspace);
 app.route("/api", policyRoutes);
 app.route("/api", fileRoutes);
+app.route("/api", assistantRoutes);
 
 app.notFound((c) => c.json({ code: "NOT_FOUND", message: "Not found." }, 404));
 
