@@ -1,0 +1,3 @@
+ENVIRONMENT=development
+# Generate with: openssl rand -hex 32
+BETTER_AUTH_SECRET=

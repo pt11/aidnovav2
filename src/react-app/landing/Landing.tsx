@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import "./App.css";
+import "./landing-base.css";
+import "./landing.css";
+
+function hubUrl(path: string) {
+	const { protocol, hostname, port } = window.location;
+	return hostname === "localhost" || hostname === "127.0.0.1"
+		? `${protocol}//hub.localhost:${port}${path}`
+		: `https://hub.aidnova.app${path}`;
+}
 
 const LOGO = "/aidnova-logo.png";
 const CONTACT_EMAIL = "helloaidnova@gmail.com";
@@ -160,10 +168,10 @@ function Nav({
 								မြန်မာ
 							</button>
 						</div>
-						<a href="/login" className="nav-signin">
+						<a href={hubUrl("/sign-in")} className="nav-signin">
 							Sign in
 						</a>
-						<a href="/signup" className="btn btn-primary btn-sm nav-signup">
+						<a href={hubUrl("/sign-up")} className="btn btn-primary btn-sm nav-signup">
 							Sign up
 						</a>
 					</div>
@@ -176,7 +184,7 @@ function Nav({
 function Hero({ lang }: { lang: Lang }) {
 	return (
 		<section id="top" className="section hero">
-			<a href="/signup" className="hero-badge">
+			<a href={hubUrl("/sign-up")} className="hero-badge">
 				Built for NGOs <span>14-day free trial →</span>
 			</a>
 			{lang === "en" ? (
@@ -206,7 +214,7 @@ function Hero({ lang }: { lang: Lang }) {
 				</>
 			)}
 			<div className="hero-actions">
-				<a href="/signup" className="btn btn-primary btn-lg">
+				<a href={hubUrl("/sign-up")} className="btn btn-primary btn-lg">
 					Start your free trial
 				</a>
 				<a href="#features" className="btn btn-outline">
@@ -795,7 +803,7 @@ function EmployeeHub() {
 							A familiar experience in English or Myanmar
 						</li>
 					</ul>
-					<a href="/signup" className="btn btn-primary btn-sm">
+					<a href={hubUrl("/sign-up")} className="btn btn-primary btn-sm">
 						Give your team a better home
 					</a>
 				</div>
@@ -911,7 +919,7 @@ function Pricing() {
 						<li>AI assistant (beta)</li>
 						<li>Email support</li>
 					</ul>
-					<a href="/signup" className="btn btn-primary">
+					<a href={hubUrl("/sign-up")} className="btn btn-primary">
 						Start free trial
 					</a>
 				</div>
@@ -932,7 +940,7 @@ function Pricing() {
 						<li>Activity logs</li>
 						<li>Priority support</li>
 					</ul>
-					<a href="/signup" className="btn btn-white">
+					<a href={hubUrl("/sign-up")} className="btn btn-white">
 						Start free trial
 					</a>
 				</div>
@@ -1015,7 +1023,7 @@ function Cta() {
 					Give them the tools to show for it.
 				</h2>
 				<p>Set up your workspace in minutes. 14-day free trial, no card needed.</p>
-				<a href="/signup" className="btn btn-white btn-lg">
+				<a href={hubUrl("/sign-up")} className="btn btn-white btn-lg">
 					Start your free trial
 				</a>
 			</div>
@@ -1068,7 +1076,7 @@ function Footer() {
 
 type Lang = "en" | "my";
 
-function App() {
+function Landing() {
 	const [lang, setLang] = useState<Lang>("en");
 
 	return (
@@ -1089,4 +1097,4 @@ function App() {
 	);
 }
 
-export default App;
+export default Landing;
