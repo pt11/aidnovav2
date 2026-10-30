@@ -51,6 +51,7 @@
 		"preview": "npm run build && vite preview",
 		"db:generate": "drizzle-kit generate",
 		"db:migrate:local": "wrangler d1 migrations apply aidnova --local",
+		"db:migrate:remote": "wrangler d1 migrations apply aidnova --remote",
 		"test:api": "node --test tests/*.test.mjs"
 	},
 	"type": "module"

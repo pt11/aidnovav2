@@ -15,13 +15,24 @@
 	},
 	"vars": {
 		"ENVIRONMENT": "production",
-		"HUB_URL": "https://hub.aidnova.app"
+		"HUB_URL": "https://hub.aidnova.app",
+		"EMAIL_FROM": "no-reply@aidnova.app",
+		"TURNSTILE_SITE_KEY": ""
 	},
+	"send_email": [
+		{
+			"name": "EMAIL"
+		}
+	],
+	"routes": [
+		{ "pattern": "aidnova.app", "custom_domain": true },
+		{ "pattern": "hub.aidnova.app", "custom_domain": true }
+	],
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "aidnova",
-			"database_id": "00000000-0000-0000-0000-000000000000",
+			"database_id": "fe057553-e55e-4be0-92ed-59e2228ff80f",
 			"migrations_dir": "migrations"
 		}
 	]

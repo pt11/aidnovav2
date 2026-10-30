@@ -34,6 +34,10 @@ async function readJson(request: Request): Promise<Record<string, unknown>> {
 
 export const api = new Hono<AppEnv>();
 
+api.get("/config", (c) =>
+	c.json({ turnstileSiteKey: c.env.TURNSTILE_SITE_KEY || null }),
+);
+
 api.get("/me", requireUser, async (c) => {
 	const currentUser = c.get("user");
 	const memberships = await getMemberships(c.get("db"), currentUser.id);

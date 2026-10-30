@@ -20,6 +20,10 @@ const translations: Record<string, { en: string; my?: string }> = {
 		en: "This is taking longer than expected. Please try again.",
 		my: "ပုံမှန်ထက် ကြာနေပါသည်။ ထပ်မံကြိုးစားပါ။",
 	},
+	"auth.security_check": {
+		en: "Please complete the security check and try again.",
+		my: "လုံခြုံရေးစစ်ဆေးမှုကို ပြီးအောင်လုပ်ပြီး ထပ်မံကြိုးစားပါ။",
+	},
 	"error.load": {
 		en: "We couldn't load this. Please try again.",
 		my: "ဤအရာကို ဖွင့်၍မရပါ။ ထပ်မံကြိုးစားပါ။",

@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { authClient, ME_QUERY_KEY } from "../api";
 import { useI18n } from "../i18n";
+import { useTurnstile } from "../turnstile";
 import { Alert, AuthCard, buttonClass, Field } from "../ui";
 
 const linkClass = "font-medium text-selected-foreground underline-offset-2 hover:underline";
@@ -16,6 +17,9 @@ function messageKey(error: AuthError): string {
 	if (error.status === 429) return "auth.too_many";
 	if (error.code === "INVALID_EMAIL_OR_PASSWORD") return "auth.invalid";
 	if (error.code?.startsWith("USER_ALREADY_EXISTS")) return "auth.email_exists";
+	if (error.code === "MISSING_RESPONSE" || error.code === "VERIFICATION_FAILED") {
+		return "auth.security_check";
+	}
 	return "error.generic";
 }
 
@@ -106,6 +110,7 @@ export function SignInPage() {
 
 export function SignUpPage() {
 	const { t } = useI18n();
+	const turnstile = useTurnstile();
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
@@ -122,10 +127,12 @@ export function SignUpPage() {
 			email,
 			password,
 			callbackURL: "/",
+			fetchOptions: turnstile.fetchOptions,
 		});
 		setSaving(false);
 		if (result.error) {
 			setError(t(messageKey(result.error)));
+			turnstile.reset();
 			return;
 		}
 		setSent(true);
@@ -181,6 +188,7 @@ export function SignUpPage() {
 					value={password}
 					onChange={(event) => setPassword(event.target.value)}
 				/>
+				{turnstile.widget}
 				<button type="submit" disabled={saving} className={buttonClass()}>
 					{t("auth.sign_up")}
 				</button>
@@ -191,6 +199,7 @@ export function SignUpPage() {
 
 export function ForgotPasswordPage() {
 	const { t } = useI18n();
+	const turnstile = useTurnstile();
 	const [email, setEmail] = useState("");
 	const [error, setError] = useState("");
 	const [saving, setSaving] = useState(false);
@@ -203,10 +212,12 @@ export function ForgotPasswordPage() {
 		const result = await authClient.requestPasswordReset({
 			email,
 			redirectTo: "/reset-password",
+			fetchOptions: turnstile.fetchOptions,
 		});
 		setSaving(false);
 		if (result.error) {
 			setError(t(messageKey(result.error)));
+			turnstile.reset();
 			return;
 		}
 		setSent(true);
@@ -236,6 +247,7 @@ export function ForgotPasswordPage() {
 						value={email}
 						onChange={(event) => setEmail(event.target.value)}
 					/>
+					{turnstile.widget}
 					<button type="submit" disabled={saving} className={buttonClass()}>
 						{t("auth.forgot_button")}
 					</button>

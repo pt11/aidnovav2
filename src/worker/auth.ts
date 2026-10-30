@@ -2,6 +2,7 @@ import { randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { captcha } from "better-auth/plugins/captcha";
 import { getDb } from "./db";
 import * as schema from "./db/schema";
 import { sendEmail } from "./email";
@@ -51,6 +52,20 @@ export function getBaseUrl(env: Env, request: Request): string {
 		: env.HUB_URL;
 }
 
+// Covers the forms that send email to an address anyone can type in. Sign-in
+// relies on rate limiting. Production always checks, so a missing secret
+// blocks these forms instead of turning the check off.
+function turnstilePlugins(env: Env) {
+	if (env.ENVIRONMENT === "development" && !env.TURNSTILE_SECRET_KEY) return [];
+	return [
+		captcha({
+			provider: "cloudflare-turnstile",
+			secretKey: env.TURNSTILE_SECRET_KEY,
+			endpoints: ["/sign-up/email", "/request-password-reset"],
+		}),
+	];
+}
+
 export function createAuth(env: Env, request: Request) {
 	const baseURL = getBaseUrl(env, request);
 
@@ -61,6 +76,7 @@ export function createAuth(env: Env, request: Request) {
 		secret: env.BETTER_AUTH_SECRET,
 		trustedOrigins: [baseURL],
 		database: drizzleAdapter(getDb(env), { provider: "sqlite", schema }),
+		plugins: turnstilePlugins(env),
 		emailAndPassword: {
 			enabled: true,
 			requireEmailVerification: true,

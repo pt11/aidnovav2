@@ -1,3 +1,5 @@
 ENVIRONMENT=development
 # Generate with: openssl rand -hex 32
 BETTER_AUTH_SECRET=
+# Leave empty to skip Turnstile in local development.
+TURNSTILE_SECRET_KEY=
