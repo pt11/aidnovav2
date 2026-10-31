@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type DragEvent, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeft,
@@ -11,16 +11,15 @@ import {
 	Link2,
 	Lock,
 	Music,
-	Pencil,
 	Plus,
 	Search,
 	Trash2,
-	Upload,
 } from "lucide-react";
 import { Link, useSearch } from "wouter";
 import { api, ApiError, useDepartments } from "../api";
 import { useI18n } from "../i18n";
 import {
+	ActionsMenu,
 	Alert,
 	buttonClass,
 	ConfirmModal,
@@ -109,6 +108,12 @@ async function uploadFile(file: File, folderId: number | null) {
 		throw new ApiError(response.status, data?.code ?? "UNKNOWN", data?.message ?? "");
 	}
 }
+
+const UPLOAD_ERRORS: Record<string, string> = {
+	TYPE_NOT_ALLOWED: "files.type_not_allowed",
+	FILE_TOO_LARGE: "files.file_too_large",
+	STORAGE_FULL: "files.storage_full",
+};
 
 function useRefreshLibrary() {
 	const queryClient = useQueryClient();
@@ -326,6 +331,7 @@ function LinkForm({
 				value={url}
 				onChange={(event) => setUrl(event.target.value)}
 			/>
+			<p className="text-xs leading-5 text-muted-foreground">{t("files.link_saved_note")}</p>
 			<div className="flex justify-end gap-2">
 				<button type="button" className={buttonClass("outline")} onClick={onDone}>
 					{t("common.cancel")}
@@ -335,6 +341,175 @@ function LinkForm({
 				</button>
 			</div>
 		</form>
+	);
+}
+
+type UploadStatus = "waiting" | "uploading" | "done" | string;
+
+function AddFilesForm({
+	folder,
+	onDone,
+}: {
+	folder: FolderItem | null;
+	onDone: () => void;
+}) {
+	const { t } = useI18n();
+	const refresh = useRefreshLibrary();
+	const [tab, setTab] = useState<"upload" | "links">("upload");
+	const [items, setItems] = useState<{ name: string; size: number; status: UploadStatus }[]>([]);
+	const [busy, setBusy] = useState(false);
+	const [tooMany, setTooMany] = useState(false);
+	const picker = useRef<HTMLInputElement>(null);
+
+	async function upload(list: FileList | null) {
+		const chosen = [...(list ?? [])];
+		if (chosen.length === 0 || busy) return;
+		setTooMany(chosen.length > MAX_BATCH);
+		if (chosen.length > MAX_BATCH) return;
+		setBusy(true);
+		const update = (index: number, status: UploadStatus) =>
+			setItems((current) =>
+				current.map((item, position) => (position === index ? { ...item, status } : item)),
+			);
+		setItems(chosen.map((file) => ({ name: file.name, size: file.size, status: "waiting" })));
+		for (const [index, file] of chosen.entries()) {
+			update(index, "uploading");
+			try {
+				if (file.size > MAX_FILE_BYTES) throw new ApiError(413, "FILE_TOO_LARGE", "");
+				await uploadFile(file, folder?.id ?? null);
+				update(index, "done");
+			} catch (error) {
+				const code = error instanceof ApiError ? error.code : "";
+				update(index, t(UPLOAD_ERRORS[code] ?? "files.upload_failed"));
+			}
+		}
+		setBusy(false);
+		await refresh();
+	}
+
+	function onDrop(event: DragEvent) {
+		event.preventDefault();
+		void upload(event.dataTransfer.files);
+	}
+
+	const tabClass = (active: boolean) =>
+		`-mb-px border-b-2 py-2 ${
+			active
+				? "border-primary font-semibold text-foreground"
+				: "border-transparent font-medium text-muted-foreground"
+		}`;
+
+	return (
+		<div>
+			<div role="tablist" className="mb-4 flex gap-4 border-b border-border">
+				<button
+					type="button"
+					role="tab"
+					aria-selected={tab === "upload"}
+					className={tabClass(tab === "upload")}
+					onClick={() => setTab("upload")}
+				>
+					{t("files.tab_upload")}
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={tab === "links"}
+					className={tabClass(tab === "links")}
+					onClick={() => setTab("links")}
+				>
+					{t("files.tab_links")}
+				</button>
+			</div>
+			{tab === "links" ? (
+				<LinkForm folderId={folder?.id ?? null} onDone={onDone} />
+			) : (
+				<div className="flex flex-col gap-3">
+					{tooMany && <Alert>{t("files.too_many_at_once", { count: MAX_BATCH })}</Alert>}
+					<button
+						type="button"
+						disabled={busy}
+						onClick={() => picker.current?.click()}
+						onDragOver={(event) => event.preventDefault()}
+						onDrop={onDrop}
+						className="rounded-[9px] border-2 border-dashed border-input p-5 text-center hover:bg-muted disabled:opacity-60"
+					>
+						<span className="block font-medium">{t("files.drop")}</span>
+						<span className="mt-1 block text-xs text-muted-foreground">{t("files.limits")}</span>
+						<span className="block text-xs text-muted-foreground">{t("files.types")}</span>
+					</button>
+					<input
+						ref={picker}
+						type="file"
+						multiple
+						hidden
+						accept={ACCEPT}
+						aria-label={t("files.upload")}
+						onChange={(event) => {
+							void upload(event.target.files);
+							event.target.value = "";
+						}}
+					/>
+					{items.length > 0 && (
+						<ul aria-live="polite" className="flex flex-col gap-1.5 text-[13px]">
+							{items.map((item, index) => {
+								const failed = !["waiting", "uploading", "done"].includes(item.status);
+								return (
+									<li
+										key={`${item.name}-${index}`}
+										className={`rounded-md border px-2.5 py-1.5 ${
+											failed ? "border-destructive" : "border-border"
+										}`}
+									>
+										<span className="flex items-center gap-2">
+											<span className="min-w-0 flex-1 break-all">{item.name}</span>
+											<span className="shrink-0 text-muted-foreground">
+												{formatSize(item.size)}
+											</span>
+											{item.status === "done" && (
+												<span className="shrink-0 font-medium text-selected-foreground">
+													{t("files.status_ready")}
+												</span>
+											)}
+											{item.status === "waiting" && (
+												<span className="shrink-0 text-muted-foreground">
+													{t("files.status_waiting")}
+												</span>
+											)}
+											{item.status === "uploading" && (
+												<span className="shrink-0 text-muted-foreground">
+													{t("files.status_uploading")}
+												</span>
+											)}
+										</span>
+										{failed && (
+											<span role="alert" className="block text-xs text-danger-foreground">
+												{item.status}
+											</span>
+										)}
+									</li>
+								);
+							})}
+						</ul>
+					)}
+					{folder && (
+						<p className="text-xs leading-5 text-muted-foreground">
+							{t("files.folder_rules_hint")}
+						</p>
+					)}
+					<div className="flex justify-end">
+						<button
+							type="button"
+							disabled={busy}
+							className={buttonClass("outline")}
+							onClick={onDone}
+						>
+							{t("common.close")}
+						</button>
+					</div>
+				</div>
+			)}
+		</div>
 	);
 }
 
@@ -553,92 +728,84 @@ function UnlockModal({
 
 function FileRow({
 	file,
+	folderName,
 	canManage,
 	onUnlock,
 	onEdit,
 	onDelete,
 }: {
 	file: FileItem;
+	folderName: string | null;
 	canManage: boolean;
 	onUnlock: () => void;
 	onEdit: () => void;
 	onDelete: () => void;
 }) {
 	const { t, language } = useI18n();
-	const details = [
+	const who = file.folderId
+		? t("files.same_as_folder")
+		: file.departments.length
+			? file.departments.map((d) => d.name).join(", ")
+			: t("files.everyone");
+	const detail = [
 		file.fileType === "upload" && file.sizeBytes !== null
 			? formatSize(file.sizeBytes)
 			: t("files.type_link"),
-		file.uploaderName,
-		new Date(file.createdAt).toLocaleDateString(language, { dateStyle: "medium" }),
-		file.departments.length > 0 && file.departments.map((d) => d.name).join(", "),
-	].filter(Boolean);
+		file.pinProtected && t("files.pin_protected"),
+		folderName,
+	]
+		.filter(Boolean)
+		.join(" · ");
+	const open = file.pinProtected
+		? [{ label: t("files.unlock"), onSelect: onUnlock }]
+		: file.fileType === "link"
+			? [{ label: t("files.open_link"), href: file.url ?? "#", newTab: true }]
+			: [
+					...(file.canPreview
+						? [
+								{
+									label: t("files.preview"),
+									href: `/api/files/${file.id}/download?inline=1`,
+									newTab: true,
+								},
+							]
+						: []),
+					{ label: t("files.download"), href: `/api/files/${file.id}/download` },
+				];
+	const actions = [
+		...open,
+		...(canManage
+			? [
+					{ label: t("common.edit"), onSelect: onEdit, separated: true },
+					{ label: t("common.delete"), onSelect: onDelete, danger: true, separated: true },
+				]
+			: []),
+	];
 
 	return (
-		<li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
-			<div className="flex min-w-0 flex-1 basis-64 items-center gap-3">
-				<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-					<FileKindIcon file={file} />
-				</span>
-				<div className="min-w-0">
-					<p className="flex items-center gap-1.5 text-sm font-medium">
-						<span className="min-w-0 break-words">{file.name}</span>
-						{file.pinProtected && (
-							<Lock
-								size={13}
-								className="shrink-0 text-muted-foreground"
-								aria-label={t("files.pin_protected")}
-							/>
-						)}
-					</p>
-					<p className="mt-0.5 break-words text-xs text-muted-foreground">
-						{details.join(" · ")}
-					</p>
-				</div>
+		<li className="flex items-center gap-3 border-t border-border px-4 py-2.5 first:border-t-0">
+			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+				<FileKindIcon file={file} />
+			</span>
+			<div className="min-w-0 flex-1">
+				<p className="flex items-center gap-1.5 font-medium">
+					<span className="min-w-0 break-words">{file.name}</span>
+					{file.pinProtected && (
+						<Lock size={13} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+					)}
+				</p>
+				<p className="break-words text-xs text-muted-foreground">{detail}</p>
 			</div>
-			<div className="flex flex-wrap items-center gap-2">
-				{file.pinProtected ? (
-					<button
-						type="button"
-						className={buttonClass("outline", "min-h-9 px-3")}
-						onClick={onUnlock}
-					>
-						<Lock size={14} aria-hidden="true" />
-						{t("files.unlock")}
-					</button>
-				) : file.fileType === "link" ? (
-					<a
-						href={file.url ?? undefined}
-						target="_blank"
-						rel="noopener noreferrer"
-						className={buttonClass("outline", "min-h-9 px-3")}
-					>
-						{t("files.open_link")}
-					</a>
-				) : (
-					<FileLinks file={file} />
-				)}
-				{canManage && (
-					<>
-						<button
-							type="button"
-							aria-label={`${t("common.edit")}: ${file.name}`}
-							className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-							onClick={onEdit}
-						>
-							<Pencil size={15} aria-hidden="true" />
-						</button>
-						<button
-							type="button"
-							aria-label={`${t("common.delete")}: ${file.name}`}
-							className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-danger-surface hover:text-danger-foreground"
-							onClick={onDelete}
-						>
-							<Trash2 size={15} aria-hidden="true" />
-						</button>
-					</>
-				)}
-			</div>
+			<p className="hidden w-36 shrink-0 break-words text-[13px] md:block">{who}</p>
+			<p className="hidden w-40 shrink-0 text-[13px] text-muted-foreground lg:block">
+				{[
+					file.uploaderName,
+					new Date(file.createdAt).toLocaleDateString(language, { dateStyle: "medium" }),
+				]
+					.filter(Boolean)
+					.join(" · ")}
+			</p>
+			<ActionsMenu label={t("files.actions_for", { name: file.name })} actions={actions} />
 		</li>
 	);
 }
@@ -677,12 +844,6 @@ function StorageUsage() {
 	);
 }
 
-const UPLOAD_ERRORS: Record<string, string> = {
-	TYPE_NOT_ALLOWED: "files.type_not_allowed",
-	FILE_TOO_LARGE: "files.file_too_large",
-	STORAGE_FULL: "files.storage_full",
-};
-
 export function FilesPage({ canManage }: { canManage: boolean }) {
 	const { t } = useI18n();
 	const refresh = useRefreshLibrary();
@@ -692,16 +853,13 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 
 	const [query, setQuery] = useState("");
 	const [filter, setFilter] = useState<Filter>("all");
-	const [modal, setModal] = useState<"folder" | "link" | null>(null);
+	const [modal, setModal] = useState<"folder" | "add" | null>(null);
 	const [editingFolder, setEditingFolder] = useState<FolderItem | null>(null);
 	const [deletingFolder, setDeletingFolder] = useState<FolderItem | null>(null);
 	const [editingFile, setEditingFile] = useState<FileItem | null>(null);
 	const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
 	const [unlocking, setUnlocking] = useState<FileItem | null>(null);
 	const [tokens, setTokens] = useState<Record<string, string>>({});
-	const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-	const [uploadErrors, setUploadErrors] = useState<string[]>([]);
-	const picker = useRef<HTMLInputElement>(null);
 
 	const files = useQuery({
 		queryKey: FILES_KEY,
@@ -740,33 +898,6 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 		);
 	}
 
-	async function upload(list: FileList | null) {
-		const chosen = [...(list ?? [])];
-		if (chosen.length === 0) return;
-		setUploadErrors([]);
-		if (chosen.length > MAX_BATCH) {
-			setUploadErrors([t("files.too_many_at_once", { count: MAX_BATCH })]);
-			return;
-		}
-		const errors: string[] = [];
-		setProgress({ done: 0, total: chosen.length });
-		for (const [index, file] of chosen.entries()) {
-			try {
-				if (file.size > MAX_FILE_BYTES) {
-					throw new ApiError(413, "FILE_TOO_LARGE", "");
-				}
-				await uploadFile(file, currentFolderId);
-			} catch (error) {
-				const code = error instanceof ApiError ? error.code : "";
-				errors.push(`${file.name}: ${t(UPLOAD_ERRORS[code] ?? "files.upload_failed")}`);
-			}
-			setProgress({ done: index + 1, total: chosen.length });
-		}
-		setProgress(null);
-		setUploadErrors(errors);
-		await refresh();
-	}
-
 	const currentFolder =
 		folders.data.find((folder) => folder.id === currentFolderId) ?? null;
 	const text = query.trim().toLowerCase();
@@ -802,33 +933,12 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 							)}
 							<button
 								type="button"
-								className={buttonClass("outline")}
-								onClick={() => setModal("link")}
-							>
-								<Link2 size={16} aria-hidden="true" />
-								{t("files.add_link")}
-							</button>
-							<button
-								type="button"
-								disabled={progress !== null}
 								className={buttonClass()}
-								onClick={() => picker.current?.click()}
+								onClick={() => setModal("add")}
 							>
-								<Upload size={16} aria-hidden="true" />
-								{t("files.upload")}
+								<Plus size={16} aria-hidden="true" />
+								{t("files.add_files")}
 							</button>
-							<input
-								ref={picker}
-								type="file"
-								multiple
-								hidden
-								accept={ACCEPT}
-								aria-label={t("files.upload")}
-								onChange={(event) => {
-									void upload(event.target.files);
-									event.target.value = "";
-								}}
-							/>
 						</div>
 					)
 				}
@@ -856,19 +966,6 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 			)}
 
 			{canManage && <StorageUsage />}
-
-			{progress && (
-				<p role="status" className="mt-4 text-sm text-muted-foreground">
-					{t("files.uploading_count", { done: progress.done, total: progress.total })}
-				</p>
-			)}
-			{uploadErrors.length > 0 && (
-				<div className="mt-4 flex flex-col gap-2">
-					{uploadErrors.map((error) => (
-						<Alert key={error}>{error}</Alert>
-					))}
-				</div>
-			)}
 
 			{(files.data.length > 0 || folders.data.length > 0) && (
 				<div className="mt-5 flex flex-wrap items-center gap-2">
@@ -953,11 +1050,25 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 			)}
 
 			{visibleFiles.length > 0 && (
-				<ul className="mt-4 divide-y divide-border rounded-card border border-border bg-card">
+				<ul className="mt-4 rounded-card border border-border bg-card">
+					<li
+						aria-hidden="true"
+						className="hidden items-center gap-3 rounded-t-card bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground md:flex"
+					>
+						<span className="min-w-0 flex-1">{t("files.col_name")}</span>
+						<span className="w-36 shrink-0">{t("files.col_who")}</span>
+						<span className="hidden w-40 shrink-0 lg:block">{t("files.col_added")}</span>
+						<span className="w-8 shrink-0" />
+					</li>
 					{visibleFiles.map((file) => (
 						<FileRow
 							key={file.id}
 							file={file}
+							folderName={
+								searching
+									? (folders.data.find((folder) => folder.id === file.folderId)?.name ?? null)
+									: null
+							}
 							canManage={canManage}
 							onUnlock={() => setUnlocking(file)}
 							onEdit={() => setEditingFile(file)}
@@ -1005,11 +1116,15 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 				/>
 			</Modal>
 			<Modal
-				title={t("files.add_link")}
-				open={modal === "link"}
+				title={
+					currentFolder
+						? t("files.add_to", { name: currentFolder.name })
+						: t("files.add_files")
+				}
+				open={modal === "add"}
 				onClose={() => setModal(null)}
 			>
-				<LinkForm folderId={currentFolderId} onDone={() => setModal(null)} />
+				<AddFilesForm folder={currentFolder} onDone={() => setModal(null)} />
 			</Modal>
 			<Modal
 				title={t("files.edit_file")}

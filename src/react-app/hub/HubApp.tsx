@@ -22,10 +22,15 @@ import { DashboardPage } from "./pages/Dashboard";
 import { FilesPage } from "./pages/Files";
 import { HubPage } from "./pages/Hub";
 import { InvitePage } from "./pages/Invite";
-import { MyProfilePage } from "./pages/MyProfile";
 import { PoliciesPage } from "./pages/Policies";
 import { PolicyDetailPage } from "./pages/PolicyDetail";
-import { SettingsPage } from "./pages/Settings";
+import { PolicyEditorPage } from "./pages/PolicyEditor";
+import {
+	SettingsDepartmentsPage,
+	SettingsGeneralPage,
+	SettingsProfilePage,
+	SettingsSecurityPage,
+} from "./pages/SettingsArea";
 import { UsersPage } from "./pages/Users";
 import { canManage, Header, WorkspaceShell } from "./Shell";
 import { buttonClass, LOGO, StartupScreen, StatePanel } from "./ui";
@@ -185,13 +190,21 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<AnnouncementsPage canManage={manager} />
 				</Route>
 				<Route path="/dashboard">
-					<DashboardPage me={me} org={org} />
+					<DashboardPage me={me} />
 				</Route>
 				<Route path="/hub">
-					<HubPage />
+					<HubPage org={org} />
 				</Route>
 				<Route path="/policies">
 					<PoliciesPage canManage={manager} />
+				</Route>
+				<Route path="/policies/new">
+					{manager ? <PolicyEditorPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/policies/:id/edit">
+					{({ id }) =>
+						manager ? <PolicyEditorPage key={id} id={id} /> : <NoAccessPage />
+					}
 				</Route>
 				<Route path="/policies/:id">
 					{({ id }) => <PolicyDetailPage key={id} id={id} canManage={manager} />}
@@ -209,14 +222,23 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<LaterPage labelKey="shell.notifications" />
 				</Route>
 				<Route path="/my-profile">
-					<MyProfilePage me={me} org={org} />
+					<Redirect to="/settings/profile" replace />
+				</Route>
+				<Route path="/settings/profile">
+					<SettingsProfilePage me={me} org={org} />
+				</Route>
+				<Route path="/settings/security">
+					<SettingsSecurityPage me={me} org={org} />
+				</Route>
+				<Route path="/settings/departments">
+					{manager ? <SettingsDepartmentsPage /> : <NoAccessPage />}
 				</Route>
 				<Route path="/users">
 					{manager ? <UsersPage me={me} role={org.role} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/reports">{managerRoute("nav.reports")}</Route>
 				<Route path="/settings">
-					{manager ? <SettingsPage org={org} /> : <NoAccessPage />}
+					{manager ? <SettingsGeneralPage org={org} /> : <NoAccessPage />}
 				</Route>
 				{/* Signed-in people arriving on an auth address go to the workspace. */}
 				<Route path="/sign-in">

@@ -9,8 +9,8 @@ import {
 	Search,
 	Send,
 } from "lucide-react";
-import { Link } from "wouter";
-import { api, ApiError } from "../api";
+import { Link, useSearch } from "wouter";
+import { api, ApiError, type Membership } from "../api";
 import { useI18n } from "../i18n";
 import { Alert, buttonClass, PageHeader, StatePanel } from "../ui";
 import { CATEGORY_KEYS, MandatoryBadge } from "./Policies";
@@ -45,7 +45,7 @@ interface ChatMessage {
 }
 
 const MAX_HISTORY = 10;
-const TABS = ["all", "policies", "documents"] as const;
+const TABS = ["all", "policies", "files", "links"] as const;
 const SUGGESTION_KEYS = ["hub.suggest_policies", "hub.suggest_leave", "hub.suggest_news"];
 const ERROR_KEYS: Record<string, string> = {
 	ASSISTANT_LIMIT: "hub.assistant_limit",
@@ -239,10 +239,18 @@ function Assistant() {
 	);
 }
 
-export function HubPage() {
+export function HubPage({ org }: { org: Membership }) {
 	const { t } = useI18n();
-	const [query, setQuery] = useState("");
+	const search = useSearch();
+	const initialQuery = new URLSearchParams(search).get("q") ?? "";
+	const [query, setQuery] = useState(initialQuery);
 	const [tab, setTab] = useState<(typeof TABS)[number]>("all");
+	// A new search from the header bar replaces what's in this page's box.
+	const [lastInitial, setLastInitial] = useState(initialQuery);
+	if (initialQuery !== lastInitial) {
+		setLastInitial(initialQuery);
+		setQuery(initialQuery);
+	}
 	const policies = useQuery({
 		queryKey: ["policies"],
 		queryFn: () => api<{ policies: HubPolicy[] }>("/policies"),
@@ -257,15 +265,25 @@ export function HubPage() {
 	const text = query.trim().toLowerCase();
 	const matches = (value: string) => !text || value.toLowerCase().includes(text);
 	const visiblePolicies =
-		tab === "documents" ? [] : (policies.data ?? []).filter((p) => matches(p.title));
-	const visibleFiles =
-		tab === "policies" ? [] : (files.data ?? []).filter((f) => matches(f.name));
+		tab === "all" || tab === "policies"
+			? (policies.data ?? []).filter((p) => matches(p.title))
+			: [];
+	const visibleFiles = (files.data ?? []).filter(
+		(file) =>
+			matches(file.name) &&
+			(tab === "all" ||
+				(tab === "files" && file.fileType === "upload") ||
+				(tab === "links" && file.fileType === "link")),
+	);
 	const loading = policies.isPending || files.isPending;
 	const failed = policies.isError || files.isError;
 
 	return (
 		<div className="mx-auto max-w-6xl p-4 md:p-6">
-			<PageHeader title={t("hub.title")} subtitle={t("hub.desc")} />
+			<PageHeader
+				title={t("hub.find_anything", { organization: org.name })}
+				subtitle={t("hub.desc")}
+			/>
 			<div className="mt-5 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_400px]">
 				<div className="min-w-0">
 					<div className="relative">
@@ -280,7 +298,7 @@ export function HubPage() {
 							placeholder={t("hub.search_placeholder")}
 							value={query}
 							onChange={(event) => setQuery(event.target.value)}
-							className="min-h-10 w-full rounded-md border border-input bg-card py-2 pr-3 pl-9 text-sm"
+							className="min-h-11 w-full rounded-md border border-input bg-card py-2 pr-3 pl-9"
 						/>
 					</div>
 					<div role="group" aria-label={t("hub.title")} className="mt-3 flex flex-wrap gap-1">

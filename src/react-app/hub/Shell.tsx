@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	BarChart3,
 	Bell,
@@ -7,6 +7,8 @@ import {
 	Check,
 	ChevronsUpDown,
 	Compass,
+	Search,
+	Sparkles,
 	FileText,
 	FolderOpen,
 	GraduationCap,
@@ -32,13 +34,19 @@ interface NavItem {
 	url: string;
 	icon: LucideIcon;
 	labelKey: string;
+	badge?: "pendingPolicies";
 }
 
 const CORE_ITEMS: NavItem[] = [
 	{ url: "/", icon: Megaphone, labelKey: "nav.announcements" },
 	{ url: "/dashboard", icon: LayoutDashboard, labelKey: "nav.dashboard" },
 	{ url: "/hub", icon: Compass, labelKey: "nav.hub" },
-	{ url: "/policies", icon: FileText, labelKey: "nav.policies" },
+	{
+		url: "/policies",
+		icon: FileText,
+		labelKey: "nav.policies",
+		badge: "pendingPolicies",
+	},
 	{ url: "/courses", icon: GraduationCap, labelKey: "nav.courses" },
 	{ url: "/files", icon: FolderOpen, labelKey: "nav.files" },
 	{ url: "/calendar", icon: CalendarDays, labelKey: "nav.calendar" },
@@ -51,13 +59,13 @@ const MANAGER_ITEMS: NavItem[] = [
 ];
 
 const PROFILE_ITEM: NavItem = {
-	url: "/my-profile",
+	url: "/settings/profile",
 	icon: UserCircle,
 	labelKey: "nav.my_profile",
 };
 
 const PRIMARY_TABS: NavItem[] = [
-	CORE_ITEMS[0],
+	{ ...CORE_ITEMS[0], labelKey: "nav.home" },
 	CORE_ITEMS[1],
 	CORE_ITEMS[4],
 	CORE_ITEMS[2],
@@ -91,13 +99,13 @@ function OrgMark({ org, size = 28 }: { org: Membership; size?: number }) {
 			src={org.logoUrl}
 			alt=""
 			style={style}
-			className="shrink-0 rounded-full border border-border object-cover"
+			className="shrink-0 rounded-md border border-border object-cover"
 		/>
 	) : (
 		<span
 			style={style}
 			aria-hidden="true"
-			className="grid shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground"
+			className="grid shrink-0 place-items-center rounded-md bg-foreground text-xs font-semibold text-background"
 		>
 			{initials(org.name)}
 		</span>
@@ -119,6 +127,18 @@ function useOrgSwitch() {
 			window.location.assign("/");
 		},
 	});
+}
+
+function OrgLabel({ org }: { org: Membership }) {
+	const { t } = useI18n();
+	return (
+		<span className="min-w-0 flex-1 leading-tight">
+			<span className="block truncate font-semibold">{org.name}</span>
+			<span className="block truncate text-xs text-muted-foreground">
+				{t(`role.${org.role}`)}
+			</span>
+		</span>
+	);
 }
 
 function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
@@ -145,9 +165,9 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 
 	if (me.memberships.length < 2) {
 		return (
-			<div className="flex min-h-9 items-center gap-2.5">
-				<OrgMark org={org} />
-				<span className="truncate text-[13px] font-semibold">{org.name}</span>
+			<div className="flex items-center gap-2.5 rounded-[9px] border border-border bg-background px-2.5 py-2">
+				<OrgMark org={org} size={32} />
+				<OrgLabel org={org} />
 			</div>
 		);
 	}
@@ -159,11 +179,11 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 				aria-expanded={open}
 				aria-label={`${t("org.switch")}: ${org.name}`}
 				onClick={() => setOpen((value) => !value)}
-				className="flex min-h-9 w-full items-center gap-2.5 rounded-md px-1 text-left hover:bg-muted"
+				className="flex w-full items-center gap-2.5 rounded-[9px] border border-border bg-background px-2.5 py-2 text-left hover:bg-muted"
 			>
-				<OrgMark org={org} />
-				<span className="flex-1 truncate text-[13px] font-semibold">{org.name}</span>
-				<ChevronsUpDown size={14} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+				<OrgMark org={org} size={32} />
+				<OrgLabel org={org} />
+				<ChevronsUpDown size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
 			</button>
 			{open && (
 				<ul className="absolute inset-x-0 top-full z-30 mt-1 rounded-md border border-border bg-card p-1 shadow-lg">
@@ -193,7 +213,9 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 	);
 }
 
-function TrialBanner({ org }: { org: Membership }) {
+const TRIAL_DAYS = 14;
+
+function TrialCard({ org }: { org: Membership }) {
 	const { t } = useI18n();
 	const [now] = useState(() => Date.now());
 	if (org.subscriptionStatus !== "trial" || !org.trialEndDate) return null;
@@ -201,15 +223,46 @@ function TrialBanner({ org }: { org: Membership }) {
 		0,
 		Math.ceil((new Date(org.trialEndDate).getTime() - now) / 86_400_000),
 	);
-	const tone =
-		days <= 3
-			? "bg-danger-surface text-danger-foreground"
-			: "bg-warning-surface text-warning-foreground";
+	const percent = Math.min(100, Math.round((days / TRIAL_DAYS) * 100));
 	return (
-		<p className={`mx-3 mt-3 rounded-md px-3 py-2 text-xs font-medium ${tone}`}>
-			{t("trial.days_remaining", { days })}
-		</p>
+		<div className="rounded-[9px] border border-border p-3">
+			<div className="flex justify-between gap-2 text-xs">
+				<span className="font-semibold">{t("shell.free_trial")}</span>
+				<span className={days <= 3 ? "font-semibold text-danger-foreground" : "text-muted-foreground"}>
+					{t("trial.days_left", { days })}
+				</span>
+			</div>
+			<div
+				role="progressbar"
+				aria-valuenow={percent}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-label={t("shell.free_trial")}
+				className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+			>
+				<div
+					className={`h-full rounded-full ${days <= 3 ? "bg-destructive" : "bg-primary"}`}
+					style={{ width: `${percent}%` }}
+				/>
+			</div>
+		</div>
 	);
+}
+
+interface NavGroup {
+	labelKey: string;
+	items: NavItem[];
+}
+
+function navGroups(role: Role): NavGroup[] {
+	const [announcements, dashboard, hub, policies, courses, files, calendar] = CORE_ITEMS;
+	return [
+		{ labelKey: "shell.workspace", items: [dashboard, announcements, hub] },
+		{ labelKey: "shell.content", items: [policies, courses, files, calendar] },
+		canManage(role)
+			? { labelKey: "shell.manage", items: MANAGER_ITEMS }
+			: { labelKey: "shell.account", items: [PROFILE_ITEM] },
+	];
 }
 
 function SidebarContent({
@@ -224,9 +277,11 @@ function SidebarContent({
 	const { t } = useI18n();
 	const [location] = useLocation();
 	const queryClient = useQueryClient();
-	const items = canManage(org.role)
-		? [...CORE_ITEMS, ...MANAGER_ITEMS]
-		: [...CORE_ITEMS, PROFILE_ITEM];
+	const dashboard = useQuery({
+		queryKey: ["dashboard"],
+		queryFn: () => api<{ pendingPolicies: unknown[] }>("/dashboard"),
+	});
+	const pendingPolicies = dashboard.data?.pendingPolicies.length ?? 0;
 
 	async function signOut() {
 		await authClient.signOut();
@@ -236,83 +291,125 @@ function SidebarContent({
 
 	return (
 		<>
-			<div className="border-b border-border px-3 py-2.5">
+			<div className="px-3 pt-3.5">
 				<OrgSwitcher me={me} org={org} />
 			</div>
-			<TrialBanner org={org} />
-			<nav aria-label={t("shell.main_nav")} className="flex-1 overflow-y-auto p-2">
-				<ul className="flex flex-col gap-0.5">
-					{items.map((item) => {
-						const active = isActivePath(location, item.url);
-						return (
-							<li key={item.url}>
-								<Link
-									href={item.url}
-									onClick={onNavigate}
-									aria-current={active ? "page" : undefined}
-									className={`flex min-h-9 items-center gap-2.5 rounded-md px-3 text-[13px] no-underline transition-colors ${
-										active
-											? "bg-primary font-medium text-primary-foreground"
-											: "text-muted-foreground hover:bg-muted hover:text-foreground"
-									}`}
-								>
-									<item.icon size={15} aria-hidden="true" className="shrink-0" />
-									{t(item.labelKey)}
-								</Link>
-							</li>
-						);
-					})}
-				</ul>
+			<nav
+				aria-label={t("shell.main_nav")}
+				className="flex-1 overflow-y-auto px-3 pt-4 pb-2"
+			>
+				{navGroups(org.role).map((group, index) => (
+					<div key={group.labelKey} className={index > 0 ? "mt-3.5" : ""}>
+						<p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+							{t(group.labelKey)}
+						</p>
+						<ul className="flex flex-col gap-0.5">
+							{group.items.map((item) => {
+								const active = isActivePath(location, item.url);
+								const badge = item.badge === "pendingPolicies" ? pendingPolicies : 0;
+								return (
+									<li key={item.url}>
+										<Link
+											href={item.url}
+											onClick={onNavigate}
+											aria-current={active ? "page" : undefined}
+											className={`flex min-h-9 items-center gap-2.5 rounded-md px-2.5 no-underline transition-colors ${
+												active
+													? "bg-primary font-medium text-primary-foreground"
+													: "text-foreground hover:bg-muted"
+											}`}
+										>
+											<item.icon size={18} aria-hidden="true" className="shrink-0" />
+											<span className="min-w-0 flex-1 truncate">{t(item.labelKey)}</span>
+											{badge > 0 && (
+												<span className="rounded-full bg-destructive px-[7px] text-[11px] font-semibold text-primary-foreground">
+													{badge}
+												</span>
+											)}
+										</Link>
+									</li>
+								);
+							})}
+						</ul>
+					</div>
+				))}
 			</nav>
-			<div className="flex items-center gap-2.5 border-t border-border px-3 py-3">
-				<span
-					aria-hidden="true"
-					className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground"
-				>
-					{initials(me.user.name)}
-				</span>
-				<div className="min-w-0 flex-1 leading-tight">
-					<p className="truncate text-xs font-medium">{me.user.name}</p>
-					<p className="truncate text-[11px] text-muted-foreground">{me.user.email}</p>
+			<div className="flex flex-col gap-3 px-3 pt-2 pb-3">
+				<TrialCard org={org} />
+				<div className="flex items-center gap-2.5 p-1">
+					<span
+						aria-hidden="true"
+						className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
+					>
+						{initials(me.user.name)}
+					</span>
+					<div className="min-w-0 flex-1 leading-tight">
+						<p className="truncate font-semibold">{me.user.name}</p>
+						<p className="truncate text-xs text-muted-foreground">{me.user.email}</p>
+					</div>
+					<button
+						type="button"
+						onClick={signOut}
+						aria-label={t("nav.logout")}
+						title={t("nav.logout")}
+						className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+					>
+						<LogOut size={16} aria-hidden="true" />
+					</button>
 				</div>
-				<button
-					type="button"
-					onClick={signOut}
-					aria-label={t("nav.logout")}
-					title={t("nav.logout")}
-					className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-				>
-					<LogOut size={15} aria-hidden="true" />
-				</button>
 			</div>
 		</>
 	);
 }
 
-function useTheme() {
-	const [dark, setDark] = useState(() =>
+export function useTheme() {
+	const [dark, setDarkState] = useState(() =>
 		document.documentElement.classList.contains("dark"),
 	);
-	function toggle() {
-		const next = !dark;
+	function setDark(next: boolean) {
 		document.documentElement.classList.toggle("dark", next);
 		try {
 			localStorage.setItem("aidnova_theme", next ? "dark" : "light");
 		} catch {
 			// The choice just won't persist, for example in a private window.
 		}
-		setDark(next);
+		setDarkState(next);
 	}
-	return { dark, toggle };
+	return { dark, setDark, toggle: () => setDark(!dark) };
+}
+
+function HeaderSearch() {
+	const { t } = useI18n();
+	const [, navigate] = useLocation();
+	const [query, setQuery] = useState("");
+	function submit(event: FormEvent) {
+		event.preventDefault();
+		navigate(`/hub?q=${encodeURIComponent(query.trim())}`);
+	}
+	return (
+		<form role="search" onSubmit={submit} className="hidden max-w-[480px] flex-1 md:block">
+			<label className="flex h-9 items-center gap-2 rounded-md border border-border bg-background px-2.5 text-muted-foreground">
+				<Search size={16} aria-hidden="true" className="shrink-0" />
+				<span className="sr-only">{t("hub.search_placeholder")}</span>
+				<input
+					type="search"
+					placeholder={t("hub.search_placeholder")}
+					value={query}
+					onChange={(event) => setQuery(event.target.value)}
+					className="min-w-0 flex-1 bg-transparent text-foreground outline-none"
+				/>
+			</label>
+		</form>
+	);
 }
 
 export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
 	const { t } = useI18n();
 	const { dark, toggle } = useTheme();
 	const iconButton =
-		"grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground";
+		"grid size-9 place-items-center rounded-md text-foreground hover:bg-muted";
 	return (
-		<header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-1 border-b border-border bg-background/85 px-2 backdrop-blur md:px-4">
+		<header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-1.5 border-b border-border bg-card/85 px-2 backdrop-blur md:gap-3 md:px-6">
 			{onOpenMenu && (
 				<button
 					type="button"
@@ -323,25 +420,36 @@ export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
 					<Menu size={18} aria-hidden="true" />
 				</button>
 			)}
-			<div className="flex-1" />
-			<LanguageSwitch />
-			<button
-				type="button"
-				onClick={toggle}
-				aria-label={dark ? t("shell.theme_light") : t("shell.theme_dark")}
-				className={iconButton}
-			>
-				{dark ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
-			</button>
-			{onOpenMenu && (
-				<Link
-					href="/notifications"
-					aria-label={t("shell.notifications")}
+			{onOpenMenu && <HeaderSearch />}
+			<div className="ml-auto flex items-center gap-1.5">
+				{onOpenMenu && (
+					<Link
+						href="/hub"
+						className="hidden h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-[13px] font-medium text-foreground no-underline hover:bg-muted lg:inline-flex"
+					>
+						<Sparkles size={16} aria-hidden="true" className="text-accent" />
+						{t("shell.ask_aidnova")}
+					</Link>
+				)}
+				<LanguageSwitch />
+				<button
+					type="button"
+					onClick={toggle}
+					aria-label={dark ? t("shell.theme_light") : t("shell.theme_dark")}
 					className={iconButton}
 				>
-					<Bell size={16} aria-hidden="true" />
-				</Link>
-			)}
+					{dark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
+				</button>
+				{onOpenMenu && (
+					<Link
+						href="/notifications"
+						aria-label={t("shell.notifications")}
+						className={iconButton}
+					>
+						<Bell size={18} aria-hidden="true" />
+					</Link>
+				)}
+			</div>
 		</header>
 	);
 }
@@ -414,7 +522,7 @@ function MobileBottomNav({ role }: { role: Role }) {
 			)}
 			<nav
 				aria-label={t("shell.main_nav")}
-				className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-background md:hidden"
+				className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-card md:hidden"
 				style={{
 					height: "calc(3.5rem + env(safe-area-inset-bottom))",
 					paddingBottom: "env(safe-area-inset-bottom)",
@@ -478,7 +586,7 @@ export function WorkspaceShell({
 
 	return (
 		<div className="flex h-dvh overflow-hidden">
-			<aside className="hidden w-60 shrink-0 flex-col border-r border-border bg-card md:flex">
+			<aside className="hidden w-[248px] shrink-0 flex-col border-r border-border bg-card md:flex">
 				<SidebarContent me={me} org={org} />
 			</aside>
 

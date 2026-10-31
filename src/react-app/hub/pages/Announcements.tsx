@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Megaphone, Pencil, Plus, Trash2 } from "lucide-react";
+import { Megaphone } from "lucide-react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
@@ -10,9 +10,7 @@ import {
 	Field,
 	Modal,
 	PageError,
-	PageHeader,
 	PageLoading,
-	SelectField,
 	StatePanel,
 	TextareaField,
 } from "../ui";
@@ -31,16 +29,17 @@ interface Announcement {
 const QUERY_KEY = ["announcements"];
 const FILTERS = ["all", "urgent", "high", "normal"] as const;
 const PRIORITY_STYLES: Record<Priority, string> = {
-	normal: "bg-muted text-muted-foreground",
-	high: "bg-warning-surface text-warning-foreground",
-	urgent: "bg-danger-surface text-danger-foreground",
+	normal: "border border-border text-foreground",
+	high: "bg-primary text-primary-foreground",
+	urgent: "bg-destructive text-primary-foreground",
 };
+const PRIORITY_ORDER: Record<Priority, number> = { urgent: 0, high: 1, normal: 2 };
 
 export function PriorityBadge({ priority }: { priority: Priority }) {
 	const { t } = useI18n();
 	return (
 		<span
-			className={`rounded-full px-2 py-0.5 text-xs font-medium ${PRIORITY_STYLES[priority]}`}
+			className={`inline-block whitespace-nowrap rounded-full px-2 text-[11px] font-semibold leading-5 ${PRIORITY_STYLES[priority]}`}
 		>
 			{t(`announcements.${priority}`)}
 		</span>
@@ -52,7 +51,7 @@ function AnnouncementForm({
 	onDone,
 }: {
 	existing: Announcement | null;
-	onDone: () => void;
+	onDone?: () => void;
 }) {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
@@ -69,8 +68,14 @@ function AnnouncementForm({
 				body: { title, content, priority },
 			}),
 		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-			onDone();
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+				queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+			]);
+			setTitle("");
+			setContent("");
+			setPriority("normal");
+			onDone?.();
 		},
 	});
 
@@ -97,21 +102,36 @@ function AnnouncementForm({
 				value={content}
 				onChange={(event) => setContent(event.target.value)}
 			/>
-			<SelectField
-				label={t("announcements.priority")}
-				value={priority}
-				onChange={(event) => setPriority(event.target.value as Priority)}
-			>
-				<option value="normal">{t("announcements.normal")}</option>
-				<option value="high">{t("announcements.high")}</option>
-				<option value="urgent">{t("announcements.urgent")}</option>
-			</SelectField>
+			<fieldset className="flex flex-col gap-2">
+				<legend className="pb-1.5 text-sm font-medium">{t("announcements.priority")}</legend>
+				{(["normal", "high", "urgent"] as const).map((option) => (
+					<label key={option} className="flex items-start gap-2 text-[13px]">
+						<input
+							type="radio"
+							name={`priority-${existing?.id ?? "new"}`}
+							className="mt-1 accent-primary"
+							checked={priority === option}
+							onChange={() => setPriority(option)}
+						/>
+						<span>
+							<b className="font-semibold">{t(`announcements.${option}`)}</b> —{" "}
+							{t(`announcements.${option}_hint`)}
+						</span>
+					</label>
+				))}
+			</fieldset>
 			<div className="flex justify-end gap-2">
-				<button type="button" className={buttonClass("outline")} onClick={onDone}>
-					{t("common.cancel")}
-				</button>
-				<button type="submit" disabled={save.isPending} className={buttonClass()}>
-					{existing ? t("common.save") : t("announcements.post")}
+				{onDone && (
+					<button type="button" className={buttonClass("outline")} onClick={onDone}>
+						{t("common.cancel")}
+					</button>
+				)}
+				<button
+					type="submit"
+					disabled={save.isPending}
+					className={buttonClass("primary", onDone ? "" : "w-full")}
+				>
+					{existing ? t("common.save") : t("dashboard.post_announcement")}
 				</button>
 			</div>
 		</form>
@@ -122,7 +142,6 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 	const { t, language } = useI18n();
 	const queryClient = useQueryClient();
 	const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
-	const [formOpen, setFormOpen] = useState(false);
 	const [editing, setEditing] = useState<Announcement | null>(null);
 	const [deleting, setDeleting] = useState<Announcement | null>(null);
 
@@ -144,135 +163,120 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 		return <PageError onRetry={() => announcements.refetch()} />;
 	}
 
-	const visible = announcements.data.filter(
-		(item) => filter === "all" || item.priority === filter,
-	);
-
-	function closeForm() {
-		setFormOpen(false);
-		setEditing(null);
-	}
+	const visible = announcements.data
+		.filter((item) => filter === "all" || item.priority === filter)
+		.sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] ||
+			new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+	const countOf = (option: (typeof FILTERS)[number]) =>
+		option === "all"
+			? announcements.data.length
+			: announcements.data.filter((item) => item.priority === option).length;
 
 	return (
-		<div className="mx-auto max-w-3xl p-4 md:p-6">
-			<PageHeader
-				title={t("nav.announcements")}
-				subtitle={t("announcements.subtitle")}
-				action={
-					canManage && (
-						<button
-							type="button"
-							className={buttonClass()}
-							onClick={() => setFormOpen(true)}
-						>
-							<Plus size={16} aria-hidden="true" />
-							{t("announcements.new")}
-						</button>
-					)
-				}
-			/>
-
-			{announcements.data.length > 0 && (
-				<div
-					role="group"
-					aria-label={t("announcements.priority")}
-					className="mt-5 flex flex-wrap gap-1.5"
-				>
-					{FILTERS.map((option) => (
-						<button
-							key={option}
-							type="button"
-							aria-pressed={filter === option}
-							onClick={() => setFilter(option)}
-							className={`rounded-full px-3 py-1 text-xs font-medium ${
-								filter === option
-									? "bg-selected text-selected-foreground"
-									: "text-muted-foreground hover:bg-muted"
-							}`}
-						>
-							{t(`announcements.${option}`)}
-						</button>
-					))}
-				</div>
-			)}
-
-			{visible.length === 0 ? (
-				<StatePanel
-					icon={Megaphone}
-					title={t(
-						announcements.data.length
-							? "announcements.none_match"
-							: "announcements.empty_title",
-					)}
-					description={
-						announcements.data.length
-							? undefined
-							: t(canManage ? "announcements.empty_manager" : "announcements.empty_staff")
-					}
-				/>
-			) : (
-				<ul className="mt-4 flex flex-col gap-3">
-					{visible.map((item) => (
-						<li
-							key={item.id}
-							className="rounded-card border border-border bg-card p-4 md:p-5"
-						>
-							<div className="flex items-start justify-between gap-3">
-								<div className="min-w-0">
-									<div className="flex flex-wrap items-center gap-2">
-										<h2 className="font-semibold">{item.title}</h2>
-										{item.priority !== "normal" && (
-											<PriorityBadge priority={item.priority} />
+		<div className="mx-auto max-w-[1180px] p-4 md:px-6 md:py-7">
+			<h1 className="text-[26px] font-semibold leading-[34px] tracking-tight">
+				{t("nav.announcements")}
+			</h1>
+			<div className="mt-4 flex flex-wrap items-start gap-6">
+				<div className="min-w-0 flex-[999_1_480px]">
+					<div
+						role="group"
+						aria-label={t("announcements.priority")}
+						className="flex flex-wrap gap-1.5"
+					>
+						{FILTERS.map((option) => (
+							<button
+								key={option}
+								type="button"
+								aria-pressed={filter === option}
+								onClick={() => setFilter(option)}
+								className={`rounded-full border px-3 py-1 text-[13px] font-medium ${
+									filter === option
+										? "border-transparent bg-foreground text-background"
+										: "border-border bg-card text-foreground hover:bg-muted"
+								}`}
+							>
+								{t(`announcements.${option}`)} · {countOf(option)}
+							</button>
+						))}
+					</div>
+					{visible.length === 0 ? (
+						<StatePanel
+							icon={Megaphone}
+							title={t(
+								announcements.data.length
+									? "announcements.none_match"
+									: "announcements.empty_title",
+							)}
+							description={
+								announcements.data.length
+									? undefined
+									: t(canManage ? "announcements.empty_manager" : "announcements.empty_staff")
+							}
+						/>
+					) : (
+						<ul className="mt-4 flex flex-col gap-3">
+							{visible.map((item) => (
+								<li key={item.id} className="rounded-card border border-border bg-card p-4 md:p-5">
+									<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+										<PriorityBadge priority={item.priority} />
+										<span className="min-w-0 flex-1">
+											{item.authorName && `${item.authorName} · `}
+											{new Date(item.createdAt).toLocaleDateString(language, {
+												dateStyle: "medium",
+											})}
+										</span>
+										{canManage && (
+											<span className="flex gap-1.5">
+												<button
+													type="button"
+													aria-label={`${t("common.edit")}: ${item.title}`}
+													className={buttonClass("outline", "min-h-[30px] px-2.5 py-0 text-xs font-medium")}
+													onClick={() => setEditing(item)}
+												>
+													{t("common.edit")}
+												</button>
+												<button
+													type="button"
+													aria-label={`${t("common.delete")}: ${item.title}`}
+													className="min-h-[30px] rounded-md px-2.5 text-xs font-medium text-danger-foreground hover:bg-danger-surface"
+													onClick={() => {
+														remove.reset();
+														setDeleting(item);
+													}}
+												>
+													{t("common.delete")}
+												</button>
+											</span>
 										)}
 									</div>
-									<p className="mt-0.5 text-xs text-muted-foreground">
-										{item.authorName && `${item.authorName} · `}
-										{new Date(item.createdAt).toLocaleDateString(language, {
-											dateStyle: "medium",
-										})}
-									</p>
-								</div>
-								{canManage && (
-									<div className="flex shrink-0 gap-1">
-										<button
-											type="button"
-											aria-label={`${t("common.edit")}: ${item.title}`}
-											className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-											onClick={() => {
-												setEditing(item);
-												setFormOpen(true);
-											}}
-										>
-											<Pencil size={15} aria-hidden="true" />
-										</button>
-										<button
-											type="button"
-											aria-label={`${t("common.delete")}: ${item.title}`}
-											className="grid size-9 place-items-center rounded-md text-muted-foreground hover:bg-danger-surface hover:text-danger-foreground"
-											onClick={() => {
-												remove.reset();
-												setDeleting(item);
-											}}
-										>
-											<Trash2 size={15} aria-hidden="true" />
-										</button>
-									</div>
-								)}
-							</div>
-							<p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6">
-								{item.content}
-							</p>
-						</li>
-					))}
-				</ul>
-			)}
+									<h2 className="mt-2 break-words text-base font-semibold">{item.title}</h2>
+									<p className="mt-1 whitespace-pre-wrap break-words">{item.content}</p>
+								</li>
+							))}
+						</ul>
+					)}
+				</div>
+				{canManage && (
+					<aside className="min-w-0 flex-[1_1_300px] rounded-card border border-border bg-card p-4 md:max-w-[360px]">
+						<h2 className="mb-3 text-base font-semibold">{t("announcements.new")}</h2>
+						<AnnouncementForm existing={null} />
+					</aside>
+				)}
+			</div>
 
 			<Modal
-				title={t(editing ? "announcements.edit" : "announcements.new")}
-				open={formOpen}
-				onClose={closeForm}
+				title={t("announcements.edit")}
+				open={editing !== null}
+				onClose={() => setEditing(null)}
 			>
-				<AnnouncementForm existing={editing} onDone={closeForm} />
+				{editing && (
+					<AnnouncementForm
+						key={editing.id}
+						existing={editing}
+						onDone={() => setEditing(null)}
+					/>
+				)}
 			</Modal>
 			<ConfirmModal
 				title={t("announcements.delete_title")}

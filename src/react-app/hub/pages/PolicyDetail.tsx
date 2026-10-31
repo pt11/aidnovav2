@@ -8,7 +8,6 @@ import {
 	Alert,
 	buttonClass,
 	ConfirmModal,
-	Modal,
 	PageError,
 	PageLoading,
 	StatePanel,
@@ -18,7 +17,6 @@ import {
 	formatPolicyDate,
 	MandatoryBadge,
 	POLICIES_KEY,
-	PolicyForm,
 	StatusBadge,
 	type PolicyDraft,
 } from "./Policies";
@@ -91,27 +89,36 @@ function AcknowledgeBox({
 		acknowledge.error.code === "POLICY_CHANGED";
 
 	return (
-		<div className="flex flex-col gap-3 rounded-card border border-border bg-card p-4">
+		<div className="sticky bottom-14 z-10 -mx-4 border-t border-border bg-card px-4 py-3.5 md:bottom-0 md:-mx-6 md:px-6">
 			{acknowledge.isError && (
-				<Alert>{t(changed ? "policies.changed" : "error.generic")}</Alert>
+				<div className="mb-3">
+					<Alert>{t(changed ? "policies.changed" : "error.generic")}</Alert>
+				</div>
 			)}
-			<label className="flex items-start gap-2.5 text-sm">
-				<input
-					type="checkbox"
-					className="mt-1 size-4 shrink-0"
-					checked={understood}
-					onChange={(event) => setUnderstood(event.target.checked)}
-				/>
-				{t("policies.read_understood")}
-			</label>
-			<button
-				type="button"
-				disabled={!understood || acknowledge.isPending}
-				className={buttonClass("primary", "self-start")}
-				onClick={() => acknowledge.mutate()}
-			>
-				{t("policies.acknowledge_this")}
-			</button>
+			<div className="flex flex-wrap items-center gap-3.5">
+				<label className="flex min-w-0 flex-[1_1_320px] items-start gap-2.5">
+					<input
+						type="checkbox"
+						className="mt-0.5 size-5 shrink-0 accent-primary"
+						checked={understood}
+						onChange={(event) => setUnderstood(event.target.checked)}
+					/>
+					<span>
+						{t("policies.read_understood_named", {
+							title: policy.title,
+							version: policy.version,
+						})}
+					</span>
+				</label>
+				<button
+					type="button"
+					disabled={!understood || acknowledge.isPending}
+					className={buttonClass("primary", "min-h-11 px-5 max-sm:w-full")}
+					onClick={() => acknowledge.mutate()}
+				>
+					{t("policies.acknowledge_this")}
+				</button>
+			</div>
 		</div>
 	);
 }
@@ -250,7 +257,6 @@ export function PolicyDetailPage({
 	const queryClient = useQueryClient();
 	const [, navigate] = useLocation();
 	const [tab, setTab] = useState<"policy" | "compliance">("policy");
-	const [editing, setEditing] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	const key = ["policy", id];
 	const policy = useQuery({
@@ -321,7 +327,7 @@ export function PolicyDetailPage({
 
 			<div className="mt-3 flex flex-wrap items-start justify-between gap-3">
 				<div className="min-w-0">
-					<h1 className="break-words text-2xl font-semibold tracking-tight">
+					<h1 className="break-words text-[30px] font-semibold leading-[38px] tracking-tight">
 						{data.title}
 					</h1>
 					<div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -336,14 +342,10 @@ export function PolicyDetailPage({
 				</div>
 				{canManage && (
 					<div className="flex gap-2">
-						<button
-							type="button"
-							className={buttonClass("outline")}
-							onClick={() => setEditing(true)}
-						>
+						<Link href={`/policies/${data.id}/edit`} className={buttonClass("outline")}>
 							<Pencil size={15} aria-hidden="true" />
 							{t("common.edit")}
-						</button>
+						</Link>
 						<button
 							type="button"
 							aria-label={t("common.delete")}
@@ -396,7 +398,7 @@ export function PolicyDetailPage({
 								</div>
 							))}
 						</dl>
-						<article className="whitespace-pre-wrap break-words rounded-card border border-border bg-card p-4 text-sm leading-7 md:p-6">
+						<article className="whitespace-pre-wrap break-words rounded-card border border-border bg-card p-5 text-base leading-7 md:px-9 md:py-8">
 							{data.content}
 						</article>
 						{data.status === "published" && (
@@ -406,20 +408,6 @@ export function PolicyDetailPage({
 				)}
 			</div>
 
-			<Modal
-				wide
-				title={t("policies.edit")}
-				open={editing}
-				onClose={() => setEditing(false)}
-			>
-				<PolicyForm
-					existing={data}
-					onDone={async () => {
-						await refresh();
-						setEditing(false);
-					}}
-				/>
-			</Modal>
 			<ConfirmModal
 				title={t("policies.delete_title")}
 				description={t("policies.delete_desc", { title: data.title })}

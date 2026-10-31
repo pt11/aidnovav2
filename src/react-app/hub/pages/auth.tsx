@@ -4,7 +4,7 @@ import { Link, useLocation } from "wouter";
 import { authClient, ME_QUERY_KEY } from "../api";
 import { useI18n } from "../i18n";
 import { useTurnstile } from "../turnstile";
-import { Alert, AuthCard, buttonClass, Field } from "../ui";
+import { Alert, AuthCard, buttonClass, Field, PasswordField, siteUrl } from "../ui";
 
 const linkClass = "font-medium text-selected-foreground underline-offset-2 hover:underline";
 
@@ -71,7 +71,8 @@ export function SignInPage() {
 
 	return (
 		<AuthCard
-			title={t("auth.sign_in_title")}
+			title={t("auth.welcome")}
+			subtitle={t("auth.welcome_sub")}
 			footer={
 				<>
 					{t("auth.no_account")}{" "}
@@ -101,20 +102,21 @@ export function SignInPage() {
 					value={email}
 					onChange={(event) => setEmail(event.target.value)}
 				/>
-				<Field
+				<PasswordField
 					label={t("auth.password")}
-					type="password"
 					autoComplete="current-password"
 					required
 					value={password}
 					onChange={(event) => setPassword(event.target.value)}
+					action={
+						<Link href="/forgot-password" className={`text-[13px] ${linkClass}`}>
+							{t("auth.forgot")}
+						</Link>
+					}
 				/>
 				<button type="submit" disabled={saving} className={buttonClass()}>
 					{t("auth.sign_in")}
 				</button>
-				<Link href="/forgot-password" className={`text-center text-sm ${linkClass}`}>
-					{t("auth.forgot")}
-				</Link>
 			</form>
 		</AuthCard>
 	);
@@ -193,9 +195,8 @@ export function SignUpPage() {
 					value={email}
 					onChange={(event) => setEmail(event.target.value)}
 				/>
-				<Field
+				<PasswordField
 					label={t("auth.password")}
-					type="password"
 					autoComplete="new-password"
 					hint={t("auth.password_hint")}
 					minLength={8}
@@ -207,6 +208,20 @@ export function SignUpPage() {
 				<button type="submit" disabled={saving} className={buttonClass()}>
 					{t("auth.sign_up")}
 				</button>
+				<p className="text-xs leading-5 text-muted-foreground">
+					{t("auth.agree_before")}{" "}
+					<a href={siteUrl("/terms-of-service")} target="_blank" rel="noopener noreferrer" className={linkClass}>
+						{t("brand.terms")}
+					</a>{" "}
+					{t("auth.agree_and")}{" "}
+					<a href={siteUrl("/privacy-policy")} target="_blank" rel="noopener noreferrer" className={linkClass}>
+						{t("brand.privacy")}
+					</a>
+					{t("auth.agree_after")}
+				</p>
+				<p className="rounded-md bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
+					{t("auth.joining_note")}
+				</p>
 			</form>
 		</AuthCard>
 	);

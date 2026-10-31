@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, inArray, isNull, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import {
 	announcements,
@@ -6,6 +6,8 @@ import {
 	departments,
 	invitations,
 	organizations,
+	policies,
+	policyAcknowledgments,
 	user,
 	userProfiles,
 } from "./db/schema";
@@ -15,8 +17,10 @@ import {
 	requireRole,
 	requireUser,
 	type AppEnv,
+	type Membership,
 } from "./middleware";
-import { pendingPoliciesFor } from "./policies";
+import { complianceOverview, pendingPoliciesFor } from "./policies";
+import type { Db } from "./db";
 import { cleanText, isEmail, isSafeLink, readJson } from "./validate";
 
 const PRIORITIES = ["normal", "high", "urgent"] as const;
@@ -266,10 +270,123 @@ workspace.delete(
 	},
 );
 
+const ACTIVITY_LIMIT = 6;
+const REVIEW_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+// What managers see on their dashboard, built only from this organization.
+async function managerDashboard(db: Db, org: Membership) {
+	const organizationId = org.organizationId;
+	const [compliance, [withoutDepartment], draftPolicies, reviewDue, acks, events] =
+		await Promise.all([
+			complianceOverview(db, org),
+			db
+				.select({ total: count() })
+				.from(userProfiles)
+				.where(
+					and(
+						eq(userProfiles.organizationId, organizationId),
+						eq(userProfiles.isActive, true),
+						isNull(userProfiles.departmentId),
+					),
+				),
+			db
+				.select({ id: policies.id, title: policies.title })
+				.from(policies)
+				.where(
+					and(
+						eq(policies.organizationId, organizationId),
+						eq(policies.status, "draft"),
+					),
+				)
+				.orderBy(desc(policies.updatedAt))
+				.limit(2),
+			db
+				.select({
+					id: policies.id,
+					title: policies.title,
+					reviewDate: policies.reviewDate,
+				})
+				.from(policies)
+				.where(
+					and(
+						eq(policies.organizationId, organizationId),
+						eq(policies.status, "published"),
+						lte(policies.reviewDate, new Date(Date.now() + REVIEW_WINDOW_MS)),
+					),
+				)
+				.orderBy(policies.reviewDate)
+				.limit(2),
+			db
+				.select({
+					id: policyAcknowledgments.id,
+					actor: user.name,
+					subject: policies.title,
+					at: policyAcknowledgments.acknowledgedAt,
+				})
+				.from(policyAcknowledgments)
+				.innerJoin(policies, eq(policyAcknowledgments.policyId, policies.id))
+				.innerJoin(user, eq(policyAcknowledgments.userId, user.id))
+				.where(eq(policies.organizationId, organizationId))
+				.orderBy(desc(policyAcknowledgments.acknowledgedAt))
+				.limit(ACTIVITY_LIMIT),
+			db
+				.select({
+					id: auditLog.id,
+					actor: user.name,
+					action: auditLog.action,
+					metadata: auditLog.metadata,
+					at: auditLog.createdAt,
+				})
+				.from(auditLog)
+				.innerJoin(user, eq(auditLog.actorUserId, user.id))
+				.where(
+					and(
+						eq(auditLog.organizationId, organizationId),
+						inArray(auditLog.action, ["invitation.accepted", "file.uploaded"]),
+					),
+				)
+				.orderBy(desc(auditLog.createdAt))
+				.limit(ACTIVITY_LIMIT),
+		]);
+	const activity = [
+		...acks.map((ack) => ({
+			key: `ack-${ack.id}`,
+			actor: ack.actor,
+			kind: "acknowledged" as const,
+			subject: ack.subject,
+			at: ack.at,
+		})),
+		...events.map((event) => ({
+			key: `event-${event.id}`,
+			actor: event.actor,
+			kind:
+				event.action === "file.uploaded"
+					? ("uploaded" as const)
+					: ("joined" as const),
+			subject:
+				event.action === "file.uploaded" && event.metadata
+					? ((JSON.parse(event.metadata) as { name?: string }).name ?? null)
+					: null,
+			at: event.at,
+		})),
+	]
+		.sort((a, b) => b.at.getTime() - a.at.getTime())
+		.slice(0, ACTIVITY_LIMIT);
+	return {
+		compliance,
+		membersWithoutDepartment: withoutDepartment.total,
+		draftPolicies,
+		reviewDue,
+		activity,
+	};
+}
+
 workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 	const db = c.get("db");
 	const organizationId = c.get("org").organizationId;
-	const [recent, [members], [departmentTotal], [invited], [posted], pendingPolicies] =
+	const org = c.get("org");
+	const isManager = org.role === "manager" || org.role === "admin";
+	const [recent, [members], [departmentTotal], [invited], [posted], pendingPolicies, manager] =
 		await Promise.all([
 			db
 				.select({
@@ -304,6 +421,7 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 				.from(announcements)
 				.where(eq(announcements.organizationId, organizationId)),
 			pendingPoliciesFor(db, c.get("org"), c.get("user").id),
+			isManager ? managerDashboard(db, org) : Promise.resolve(null),
 		]);
 	return c.json({
 		recent,
@@ -312,5 +430,6 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 		invitations: invited.total,
 		announcements: posted.total,
 		pendingPolicies,
+		manager,
 	});
 });

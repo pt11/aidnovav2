@@ -684,6 +684,14 @@ describe("team and workspace", () => {
 		);
 	});
 
+	test("manager dashboard details are hidden from staff", async () => {
+		const asStaff = await staff.request("/api/dashboard");
+		assert.equal(asStaff.data.manager, null);
+		const asManager = await manager.request("/api/dashboard");
+		assert.ok(asManager.data.manager.compliance);
+		assert.ok(Array.isArray(asManager.data.manager.activity));
+	});
+
 	test("the dashboard only counts this organization", async () => {
 		const { data } = await outsider.request("/api/dashboard");
 		assert.equal(data.members, 1);
@@ -908,6 +916,23 @@ describe("policies", () => {
 		assert.ok(!after.data.pendingPolicies.some((p) => p.id === id));
 	});
 
+	test("dashboard compliance counts the right people, and only this organization", async () => {
+		const id = await create({ title: "Counted", departmentIds: [financeId] });
+		await finance.request(`/api/policies/${id}/acknowledge`, {
+			method: "POST",
+			body: { version: 1 },
+		});
+		const { data } = await manager.request("/api/dashboard");
+		const overview = data.manager.compliance;
+		assert.ok(overview.required >= 1);
+		assert.ok(!overview.behind.some((p) => p.id === id));
+		const financeRow = overview.departments.find((d) => d.name === "Finance");
+		assert.ok(financeRow);
+		const other = await outsider.request("/api/dashboard");
+		assert.equal(other.data.manager.compliance.required, 0);
+		assert.deepEqual(other.data.manager.activity, []);
+	});
+
 	test("only managers can delete", async () => {
 		const id = await create({ title: "Delete me" });
 		assert.equal((await programs.request(`/api/policies/${id}`, { method: "DELETE" })).status, 403);
@@ -1125,6 +1150,47 @@ describe("files", () => {
 		const row = folders.find((f) => f.id === folder.id);
 		assert.equal(row.pinProtected, true);
 		assert.equal(row.pinHash, undefined);
+	});
+
+	test("a department can't be deleted while it limits who sees something", async () => {
+		const makeDepartment = async (name) =>
+			(await admin.request(`${CURRENT}/departments`, { method: "POST", body: { name: `${name}-${RUN}` } })).data.id;
+		const remove = (id) => admin.request(`${CURRENT}/departments/${id}`, { method: "DELETE" });
+
+		const forPolicy = await makeDepartment("LimitsPolicy");
+		const { data: policy } = await admin.request("/api/policies", {
+			method: "POST",
+			body: {
+				title: "Limited policy",
+				category: "General",
+				content: "Secret words.",
+				status: "published",
+				isMandatory: false,
+				effectiveDate: "",
+				reviewDate: "",
+				departmentIds: [forPolicy],
+			},
+		});
+		assert.equal((await remove(forPolicy)).data.code, "DEPARTMENT_IN_USE");
+		assert.equal((await finance.request(`/api/policies/${policy.id}`)).status, 404);
+
+		const forFile = await makeDepartment("LimitsFile");
+		const { data: file } = await upload(admin, "limited.pdf");
+		await patchFile(admin, file.id, { name: "limited.pdf", departmentIds: [forFile] });
+		assert.equal((await remove(forFile)).data.code, "DEPARTMENT_IN_USE");
+		assert.equal((await finance.fileRequest(`/api/files/${file.id}/download`)).status, 404);
+
+		const forFolder = await makeDepartment("LimitsFolder");
+		const { data: folder } = await admin.request("/api/folders", {
+			method: "POST",
+			body: { name: "Limited", departmentIds: [forFolder] },
+		});
+		const { data: inside } = await upload(admin, "inside.pdf", "x", folder.id);
+		assert.equal((await remove(forFolder)).data.code, "DEPARTMENT_IN_USE");
+		assert.equal((await finance.fileRequest(`/api/files/${inside.id}/download`)).status, 404);
+
+		const unused = await makeDepartment("Unused");
+		assert.equal((await remove(unused)).status, 200);
 	});
 
 	test("repeated wrong PINs are blocked, even with the right one", async () => {

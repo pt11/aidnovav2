@@ -1,20 +1,15 @@
-import { useState, type FormEvent } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { CircleCheck, FileText, Plus, Search } from "lucide-react";
-import { Link, useLocation } from "wouter";
-import { api, useDepartments } from "../api";
+import { Link } from "wouter";
+import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
-	Alert,
 	buttonClass,
-	Field,
-	Modal,
 	PageError,
 	PageHeader,
 	PageLoading,
-	SelectField,
 	StatePanel,
-	TextareaField,
 } from "../ui";
 
 export type PolicyStatus = "draft" | "published" | "archived";
@@ -39,6 +34,7 @@ interface PolicySummary {
 	isMandatory: boolean;
 	version: number;
 	effectiveDate: string | null;
+	reviewDate: string | null;
 	departments: { id: number; name: string }[];
 	acknowledged: boolean;
 	required: boolean;
@@ -56,9 +52,9 @@ export const CATEGORY_KEYS: Record<string, string> = {
 	General: "policies.cat_general",
 };
 const STATUS_STYLES: Record<PolicyStatus, string> = {
-	draft: "bg-muted text-muted-foreground",
+	draft: "border border-border bg-muted text-foreground",
 	published: "bg-selected text-selected-foreground",
-	archived: "bg-muted text-muted-foreground",
+	archived: "border border-border bg-muted text-muted-foreground",
 };
 
 export function StatusBadge({ status }: { status: PolicyStatus }) {
@@ -75,7 +71,7 @@ export function StatusBadge({ status }: { status: PolicyStatus }) {
 export function MandatoryBadge() {
 	const { t } = useI18n();
 	return (
-		<span className="rounded-full bg-warning-surface px-2 py-0.5 text-xs font-medium text-warning-foreground">
+		<span className="rounded-full bg-primary px-2 py-0.5 text-xs font-semibold text-primary-foreground">
 			{t("policies.mandatory_badge")}
 		</span>
 	);
@@ -87,166 +83,6 @@ export function formatPolicyDate(value: string, language: string) {
 		dateStyle: "medium",
 		timeZone: "UTC",
 	});
-}
-
-export function PolicyForm({
-	existing,
-	onDone,
-}: {
-	existing: PolicyDraft | null;
-	onDone: (id: number) => void;
-}) {
-	const { t } = useI18n();
-	const queryClient = useQueryClient();
-	const departments = useDepartments();
-	const [values, setValues] = useState({
-		title: existing?.title ?? "",
-		category: existing?.category ?? "General",
-		content: existing?.content ?? "",
-		status: existing?.status ?? ("draft" as PolicyStatus),
-		isMandatory: existing?.isMandatory ?? false,
-		effectiveDate: existing?.effectiveDate?.slice(0, 10) ?? "",
-		reviewDate: existing?.reviewDate?.slice(0, 10) ?? "",
-		departmentIds: existing?.departments.map((d) => d.id) ?? [],
-	});
-	const save = useMutation({
-		mutationFn: () =>
-			api<{ id: number }>(existing ? `/policies/${existing.id}` : "/policies", {
-				method: existing ? "PATCH" : "POST",
-				body: values,
-			}),
-		onSuccess: async ({ id }) => {
-			await queryClient.invalidateQueries({ queryKey: POLICIES_KEY });
-			onDone(id);
-		},
-	});
-	const set = <K extends keyof typeof values>(name: K, value: (typeof values)[K]) =>
-		setValues((current) => ({ ...current, [name]: value }));
-	const willAskAgain =
-		existing !== null &&
-		existing.status !== "draft" &&
-		(values.title.trim() !== existing.title ||
-			values.content.trim() !== existing.content);
-
-	function submit(event: FormEvent) {
-		event.preventDefault();
-		save.mutate();
-	}
-
-	return (
-		<form onSubmit={submit} className="flex flex-col gap-4">
-			{save.isError && <Alert>{t("error.generic")}</Alert>}
-			<Field
-				label={t("policies.title")}
-				required
-				maxLength={500}
-				value={values.title}
-				onChange={(event) => set("title", event.target.value)}
-			/>
-			<div className="grid gap-4 sm:grid-cols-2">
-				<SelectField
-					label={t("policies.category")}
-					value={values.category}
-					onChange={(event) => set("category", event.target.value)}
-				>
-					{Object.entries(CATEGORY_KEYS).map(([value, key]) => (
-						<option key={value} value={value}>
-							{t(key)}
-						</option>
-					))}
-				</SelectField>
-				<SelectField
-					label={t("policies.status")}
-					value={values.status}
-					onChange={(event) => set("status", event.target.value as PolicyStatus)}
-				>
-					<option value="draft">{t("policies.draft")}</option>
-					<option value="published">{t("policies.published")}</option>
-					{existing && <option value="archived">{t("policies.archived")}</option>}
-				</SelectField>
-			</div>
-			<TextareaField
-				label={t("policies.content")}
-				required
-				maxLength={100000}
-				rows={12}
-				value={values.content}
-				onChange={(event) => set("content", event.target.value)}
-			/>
-			{willAskAgain && <p className="rounded-md bg-warning-surface px-3 py-2 text-sm text-warning-foreground">{t("policies.new_version_warning")}</p>}
-			<div className="grid gap-4 sm:grid-cols-2">
-				<Field
-					label={t("policies.effective_date")}
-					type="date"
-					value={values.effectiveDate}
-					onChange={(event) => set("effectiveDate", event.target.value)}
-				/>
-				<Field
-					label={t("policies.review_date")}
-					type="date"
-					value={values.reviewDate}
-					onChange={(event) => set("reviewDate", event.target.value)}
-				/>
-			</div>
-			<label className="flex items-start gap-2.5 text-sm">
-				<input
-					type="checkbox"
-					className="mt-1 size-4 shrink-0"
-					checked={values.isMandatory}
-					onChange={(event) => set("isMandatory", event.target.checked)}
-				/>
-				<span>
-					<span className="font-medium">{t("policies.mandatory")}</span>
-					<span className="block text-muted-foreground">
-						{t("policies.mandatory_hint")}
-					</span>
-				</span>
-			</label>
-			<fieldset className="flex flex-col gap-2">
-				<legend className="text-sm font-medium">{t("policies.who_can_see")}</legend>
-				<p className="text-xs leading-5 text-muted-foreground">
-					{t("policies.who_can_see_hint")}
-				</p>
-				{departments.data?.length === 0 && (
-					<p className="text-sm text-muted-foreground">
-						{t("policies.no_departments")}
-					</p>
-				)}
-				<div className="grid gap-1.5 sm:grid-cols-2">
-					{departments.data?.map((department) => (
-						<label key={department.id} className="flex items-center gap-2 text-sm">
-							<input
-								type="checkbox"
-								className="size-4 shrink-0"
-								checked={values.departmentIds.includes(department.id)}
-								onChange={(event) =>
-									set(
-										"departmentIds",
-										event.target.checked
-											? [...values.departmentIds, department.id]
-											: values.departmentIds.filter((id) => id !== department.id),
-									)
-								}
-							/>
-							<span className="min-w-0 break-words">{department.name}</span>
-						</label>
-					))}
-				</div>
-			</fieldset>
-			<div className="flex justify-end gap-2">
-				<button
-					type="button"
-					className={buttonClass("outline")}
-					onClick={() => onDone(existing?.id ?? 0)}
-				>
-					{t("common.cancel")}
-				</button>
-				<button type="submit" disabled={save.isPending} className={buttonClass()}>
-					{t("common.save")}
-				</button>
-			</div>
-		</form>
-	);
 }
 
 function PolicyCard({ policy }: { policy: PolicySummary }) {
@@ -319,13 +155,110 @@ function PolicyCard({ policy }: { policy: PolicySummary }) {
 	);
 }
 
+const REVIEW_SOON_MS = 30 * 24 * 60 * 60 * 1000;
+
+function complianceOf(policy: PolicySummary) {
+	return policy.status === "published" && policy.isMandatory ? policy.compliance : null;
+}
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+	return (
+		<div className="rounded-card border border-border bg-card px-4 py-3">
+			<dt className="text-[13px] text-muted-foreground">{label}</dt>
+			<dd className="text-2xl font-semibold leading-8">{value}</dd>
+		</div>
+	);
+}
+
+function ManagerTable({ policies }: { policies: PolicySummary[] }) {
+	const { t, language } = useI18n();
+	const [now] = useState(() => Date.now());
+	return (
+		<div className="mt-3 overflow-x-auto rounded-card border border-border bg-card">
+			<table className="w-full min-w-[720px] text-left">
+				<thead className="bg-background text-xs text-muted-foreground">
+					<tr>
+						<th scope="col" className="px-4 py-2.5 font-semibold">{t("policies.col_policy")}</th>
+						<th scope="col" className="px-2 py-2.5 font-semibold">{t("policies.status")}</th>
+						<th scope="col" className="px-2 py-2.5 font-semibold">{t("policies.acknowledged")}</th>
+						<th scope="col" className="px-4 py-2.5 font-semibold">{t("policies.col_review")}</th>
+					</tr>
+				</thead>
+				<tbody>
+					{policies.map((policy) => {
+						const compliance = complianceOf(policy);
+						const reviewSoon =
+							policy.reviewDate !== null &&
+							new Date(policy.reviewDate).getTime() - now < REVIEW_SOON_MS;
+						return (
+							<tr key={policy.id} className="border-t border-border hover:bg-muted/40">
+								<td className="px-4 py-3">
+									<Link
+										href={`/policies/${policy.id}`}
+										className="break-words font-semibold text-foreground no-underline hover:underline"
+									>
+										{policy.title}
+									</Link>
+									<p className="break-words text-xs text-muted-foreground">
+										{t(CATEGORY_KEYS[policy.category] ?? "policies.cat_general")}
+										{" · "}
+										{t("policies.version", { version: policy.version })}
+										{" · "}
+										{policy.departments.length
+											? policy.departments.map((d) => d.name).join(", ")
+											: t("policies.all_departments_short")}
+									</p>
+								</td>
+								<td className="px-2 py-3">
+									<span className="flex flex-wrap gap-1">
+										{policy.status === "published" ? (
+											policy.isMandatory ? (
+												<MandatoryBadge />
+											) : (
+												<span className="rounded-full border border-border px-2 py-0.5 text-xs font-medium">
+													{t("policies.optional")}
+												</span>
+											)
+										) : (
+											<StatusBadge status={policy.status} />
+										)}
+										{reviewSoon && policy.status === "published" && (
+											<span className="rounded-full bg-warning-surface px-2 py-0.5 text-xs font-medium text-warning-foreground">
+												{t("policies.review_due")}
+											</span>
+										)}
+									</span>
+								</td>
+								<td className="px-2 py-3 text-[13px]">
+									{compliance ? (
+										<span className="font-medium">
+											{compliance.acknowledged}/{compliance.total}
+										</span>
+									) : (
+										<span className="text-muted-foreground">
+											{policy.status === "published" ? t("policies.not_required") : "—"}
+										</span>
+									)}
+								</td>
+								<td className="px-4 py-3 text-[13px] text-muted-foreground">
+									{policy.reviewDate
+										? formatPolicyDate(policy.reviewDate, language)
+										: "—"}
+								</td>
+							</tr>
+						);
+					})}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
 export function PoliciesPage({ canManage }: { canManage: boolean }) {
 	const { t } = useI18n();
-	const [, navigate] = useLocation();
 	const [search, setSearch] = useState("");
 	const [category, setCategory] = useState("all");
-	const [status, setStatus] = useState("all");
-	const [formOpen, setFormOpen] = useState(false);
+	const [tab, setTab] = useState<"all" | "followup" | "drafts">("all");
 	const policies = useQuery({
 		queryKey: POLICIES_KEY,
 		queryFn: () => api<{ policies: PolicySummary[] }>("/policies"),
@@ -340,42 +273,92 @@ export function PoliciesPage({ canManage }: { canManage: boolean }) {
 		policy.isMandatory &&
 		policy.required &&
 		!policy.acknowledged;
+	const hasPending = (policy: PolicySummary) => {
+		const compliance = complianceOf(policy);
+		return !!compliance && compliance.acknowledged < compliance.total;
+	};
+	const inTab = (policy: PolicySummary) =>
+		tab === "all" ||
+		(tab === "followup" ? hasPending(policy) : policy.status === "draft");
 	const query = search.trim().toLowerCase();
 	const visible = policies.data
 		.filter(
 			(policy) =>
 				(!query || policy.title.toLowerCase().includes(query)) &&
 				(category === "all" || policy.category === category) &&
-				(status === "all" || policy.status === status),
+				(!canManage || inTab(policy)),
 		)
 		.sort((a, b) => Number(needsAction(b)) - Number(needsAction(a)));
 
+	const published = policies.data.filter((policy) => policy.status === "published");
+	const mandatory = published.filter((policy) => policy.isMandatory);
+	const totals = mandatory.reduce(
+		(sum, policy) => ({
+			done: sum.done + (policy.compliance?.acknowledged ?? 0),
+			total: sum.total + (policy.compliance?.total ?? 0),
+		}),
+		{ done: 0, total: 0 },
+	);
+
 	return (
-		<div className="mx-auto max-w-4xl p-4 md:p-6">
+		<div className="mx-auto max-w-[1180px] p-4 md:px-6 md:py-7">
 			<PageHeader
 				title={t("nav.policies")}
 				subtitle={t(canManage ? "policies.desc_admin" : "policies.desc_staff")}
 				action={
 					canManage && (
-						<button
-							type="button"
-							className={buttonClass()}
-							onClick={() => setFormOpen(true)}
-						>
+						<Link href="/policies/new" className={buttonClass("primary", "min-h-9 py-0")}>
 							<Plus size={16} aria-hidden="true" />
 							{t("policies.new")}
-						</button>
+						</Link>
 					)
 				}
 			/>
 
+			{canManage && (
+				<dl className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+					<Stat label={t("policies.published")} value={published.length} />
+					<Stat label={t("policies.mandatory_badge")} value={mandatory.length} />
+					<Stat
+						label={t("policies.acknowledged")}
+						value={totals.total ? `${Math.round((totals.done / totals.total) * 100)}%` : "—"}
+					/>
+					<Stat label={t("policies.pending")} value={totals.total - totals.done} />
+				</dl>
+			)}
+
 			{policies.data.length > 0 && (
-				<div className="mt-5 flex flex-wrap gap-2">
+				<div className="mt-4 flex flex-wrap items-center gap-2">
+					{canManage && (
+						<div role="group" aria-label={t("policies.status")} className="flex flex-wrap gap-1.5">
+							{(
+								[
+									["all", policies.data.length],
+									["followup", policies.data.filter(hasPending).length],
+									["drafts", policies.data.filter((p) => p.status === "draft").length],
+								] as const
+							).map(([option, count]) => (
+								<button
+									key={option}
+									type="button"
+									aria-pressed={tab === option}
+									onClick={() => setTab(option)}
+									className={`rounded-full border px-3 py-1 text-[13px] font-medium ${
+										tab === option
+											? "border-transparent bg-foreground text-background"
+											: "border-border bg-card text-foreground hover:bg-muted"
+									}`}
+								>
+									{t(`policies.tab_${option}`)} · {count}
+								</button>
+							))}
+						</div>
+					)}
 					<div className="relative min-w-52 flex-1">
 						<Search
 							size={15}
 							aria-hidden="true"
-							className="pointer-events-none absolute top-3 left-3 text-muted-foreground"
+							className="pointer-events-none absolute top-2.5 left-2.5 text-muted-foreground"
 						/>
 						<input
 							type="search"
@@ -383,14 +366,14 @@ export function PoliciesPage({ canManage }: { canManage: boolean }) {
 							placeholder={t("policies.search")}
 							value={search}
 							onChange={(event) => setSearch(event.target.value)}
-							className="min-h-10 w-full rounded-md border border-input bg-card py-2 pr-3 pl-9 text-sm"
+							className="min-h-9 w-full rounded-md border border-input bg-card py-1.5 pr-3 pl-8"
 						/>
 					</div>
 					<select
 						aria-label={t("policies.category")}
 						value={category}
 						onChange={(event) => setCategory(event.target.value)}
-						className="min-h-10 rounded-md border border-input bg-card px-2 text-sm"
+						className="min-h-9 rounded-md border border-input bg-card px-2 text-[13px]"
 					>
 						<option value="all">{t("policies.all_categories")}</option>
 						{Object.entries(CATEGORY_KEYS).map(([value, key]) => (
@@ -399,19 +382,6 @@ export function PoliciesPage({ canManage }: { canManage: boolean }) {
 							</option>
 						))}
 					</select>
-					{canManage && (
-						<select
-							aria-label={t("policies.status")}
-							value={status}
-							onChange={(event) => setStatus(event.target.value)}
-							className="min-h-10 rounded-md border border-input bg-card px-2 text-sm"
-						>
-							<option value="all">{t("policies.all_statuses")}</option>
-							<option value="draft">{t("policies.draft")}</option>
-							<option value="published">{t("policies.published")}</option>
-							<option value="archived">{t("policies.archived")}</option>
-						</select>
-					)}
 				</div>
 			)}
 
@@ -428,27 +398,19 @@ export function PoliciesPage({ canManage }: { canManage: boolean }) {
 					}
 				/>
 			) : (
-				<ul className="mt-4 flex flex-col gap-3">
-					{visible.map((policy) => (
-						<PolicyCard key={policy.id} policy={policy} />
-					))}
-				</ul>
+				<>
+					{canManage && (
+						<div className="hidden md:block">
+							<ManagerTable policies={visible} />
+						</div>
+					)}
+					<ul className={`mt-4 flex flex-col gap-3 ${canManage ? "md:hidden" : ""}`}>
+						{visible.map((policy) => (
+							<PolicyCard key={policy.id} policy={policy} />
+						))}
+					</ul>
+				</>
 			)}
-
-			<Modal
-				wide
-				title={t("policies.new")}
-				open={formOpen}
-				onClose={() => setFormOpen(false)}
-			>
-				<PolicyForm
-					existing={null}
-					onDone={(id) => {
-						setFormOpen(false);
-						if (id) navigate(`/policies/${id}`);
-					}}
-				/>
-			</Modal>
 		</div>
 	);
 }

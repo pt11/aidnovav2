@@ -225,6 +225,77 @@ export async function readablePublishedPolicies(
 	);
 }
 
+// How the organization is doing on mandatory policies, for manager dashboards.
+export async function complianceOverview(db: Db, org: Membership) {
+	const [rows, access, members, acks] = await Promise.all([
+		db
+			.select({
+				id: policies.id,
+				title: policies.title,
+				version: policies.version,
+			})
+			.from(policies)
+			.where(
+				and(
+					eq(policies.organizationId, org.organizationId),
+					eq(policies.status, "published"),
+					eq(policies.isMandatory, true),
+				),
+			),
+		loadAccess(db, org.organizationId),
+		activeMembers(db, org.organizationId),
+		db
+			.select({
+				policyId: policyAcknowledgments.policyId,
+				userId: policyAcknowledgments.userId,
+				version: policyAcknowledgments.policyVersion,
+			})
+			.from(policyAcknowledgments)
+			.innerJoin(policies, eq(policyAcknowledgments.policyId, policies.id))
+			.where(eq(policies.organizationId, org.organizationId)),
+	]);
+	const done = new Set(acks.map((ack) => `${ack.policyId}:${ack.version}:${ack.userId}`));
+	const byDepartment = new Map<string, { required: number; acknowledged: number }>();
+	const behind: { id: number; title: string; pending: number }[] = [];
+	let required = 0;
+	let acknowledged = 0;
+	for (const policy of rows) {
+		const audience = audienceOf(
+			members,
+			(access.get(policy.id) ?? []).map((department) => department.id),
+		);
+		let pending = 0;
+		for (const member of audience) {
+			const isDone = done.has(`${policy.id}:${policy.version}:${member.userId}`);
+			required++;
+			if (isDone) acknowledged++;
+			else pending++;
+			if (member.departmentName) {
+				const totals = byDepartment.get(member.departmentName) ?? {
+					required: 0,
+					acknowledged: 0,
+				};
+				totals.required++;
+				if (isDone) totals.acknowledged++;
+				byDepartment.set(member.departmentName, totals);
+			}
+		}
+		if (pending > 0) behind.push({ id: policy.id, title: policy.title, pending });
+	}
+	return {
+		required,
+		acknowledged,
+		mandatoryPolicies: rows.length,
+		departments: [...byDepartment]
+			.map(([name, totals]) => ({
+				name,
+				percent: Math.round((totals.acknowledged / totals.required) * 100),
+			}))
+			.sort((a, b) => b.percent - a.percent),
+		behind: behind.sort((a, b) => b.pending - a.pending).slice(0, 3),
+	};
+}
+
 function parseDate(value: unknown): Date | null | undefined {
 	if (value === null || value === undefined || value === "") return null;
 	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {

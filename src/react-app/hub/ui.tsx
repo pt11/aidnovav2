@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { CircleAlert, type LucideIcon } from "lucide-react";
+import { Check, CircleAlert, MoreHorizontal, type LucideIcon } from "lucide-react";
 import { useI18n } from "./i18n";
 
 export const LOGO = "/aidnova-logo.png";
@@ -121,7 +121,7 @@ export function PageHeader({
 	return (
 		<div className="flex flex-wrap items-start justify-between gap-3">
 			<div className="min-w-0">
-				<h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+				<h1 className="text-[26px] font-semibold leading-[34px] tracking-tight">{title}</h1>
 				{subtitle && (
 					<p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
 				)}
@@ -320,6 +320,61 @@ export function StartupScreen() {
 	);
 }
 
+// The public site is on the bare domain, and locally on plain localhost.
+export function siteUrl(path = "") {
+	const { protocol, hostname, port } = window.location;
+	return hostname.endsWith("localhost")
+		? `${protocol}//localhost:${port}${path}`
+		: `https://aidnova.app${path}`;
+}
+
+function BrandPanel() {
+	const { t } = useI18n();
+	return (
+		<section
+			aria-label={t("brand.about")}
+			className="relative hidden flex-col overflow-hidden bg-primary px-12 py-10 text-primary-foreground lg:flex"
+		>
+			<span
+				aria-hidden="true"
+				className="absolute -right-40 -bottom-40 size-[520px] rounded-full border border-white/20"
+			/>
+			<span
+				aria-hidden="true"
+				className="absolute -right-[60px] -bottom-[60px] size-80 rounded-full bg-white/10"
+			/>
+			<div className="flex items-center gap-2 font-semibold">
+				<img src={LOGO} alt="" width="28" height="28" className="rounded-[5px]" />
+				AidNova
+			</div>
+			<div className="relative my-auto max-w-[460px]">
+				<h2 className="text-[36px] font-semibold leading-[44px] tracking-tight">
+					{t("brand.title")}
+				</h2>
+				<p className="mt-4 text-base leading-[26px] text-white/90">{t("brand.desc")}</p>
+				<ul className="mt-6 flex flex-col gap-2.5">
+					{["brand.point_policies", "brand.point_courses", "brand.point_ngos"].map((key) => (
+						<li key={key} className="flex items-center gap-2.5">
+							<Check size={16} aria-hidden="true" className="shrink-0" />
+							{t(key)}
+						</li>
+					))}
+				</ul>
+			</div>
+			<p className="relative text-xs text-white/85">
+				© 2026 AidNova ·{" "}
+				<a href={siteUrl("/privacy-policy")} className="text-inherit underline">
+					{t("brand.privacy")}
+				</a>{" "}
+				·{" "}
+				<a href={siteUrl("/terms-of-service")} className="text-inherit underline">
+					{t("brand.terms")}
+				</a>
+			</p>
+		</section>
+	);
+}
+
 export function AuthCard({
 	title,
 	subtitle,
@@ -331,24 +386,205 @@ export function AuthCard({
 	children: ReactNode;
 	footer?: ReactNode;
 }) {
+	const { t } = useI18n();
 	return (
-		<main className="flex min-h-dvh flex-col items-center justify-center gap-5 px-4 py-10">
-			<div className="flex items-center gap-2 font-semibold tracking-tight">
-				<img src={LOGO} alt="" width="28" height="28" className="rounded-[5px]" />
-				AidNova
+		<div className="grid min-h-dvh lg:grid-cols-2">
+			<BrandPanel />
+			<main className="flex min-w-0 flex-col bg-card">
+				<div className="flex items-center justify-between gap-3 px-5 py-4 md:px-8">
+					<a
+						href={siteUrl()}
+						className="text-[13px] text-muted-foreground no-underline hover:text-foreground"
+					>
+						← {t("brand.back_home")}
+					</a>
+					<LanguageSwitch />
+				</div>
+				<div className="flex flex-1 items-center justify-center px-5 pb-10">
+					<div className="w-full max-w-[400px]">
+						<div className="mb-6 flex items-center gap-2 font-semibold tracking-tight lg:hidden">
+							<img src={LOGO} alt="" width="28" height="28" className="rounded-[5px]" />
+							AidNova
+						</div>
+						<h1 className="text-[26px] font-semibold leading-[34px] tracking-tight">{title}</h1>
+						{subtitle && <p className="mt-1 text-muted-foreground">{subtitle}</p>}
+						<div className="mt-6">{children}</div>
+						{footer && (
+							<div className="mt-5 text-center text-[13px] text-muted-foreground">{footer}</div>
+						)}
+					</div>
+				</div>
+			</main>
+		</div>
+	);
+}
+
+export function PasswordField({
+	label,
+	hint,
+	action,
+	...inputProps
+}: {
+	label: string;
+	hint?: string;
+	action?: ReactNode;
+} & React.InputHTMLAttributes<HTMLInputElement>) {
+	const { t } = useI18n();
+	const id = useId();
+	const [shown, setShown] = useState(false);
+	return (
+		<div className="flex flex-col gap-1.5">
+			<div className="flex items-center justify-between gap-3">
+				<label htmlFor={id} className="text-sm font-medium">
+					{label}
+				</label>
+				{action}
 			</div>
-			<div className="w-full max-w-sm rounded-card border border-border bg-card p-6 shadow-sm">
-				<h1 className="text-xl font-semibold">{title}</h1>
-				{subtitle && (
-					<p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
-				)}
-				<div className="mt-5">{children}</div>
+			<div className="relative">
+				<input
+					id={id}
+					aria-describedby={hint ? `${id}-hint` : undefined}
+					className={`${CONTROL_CLASS} pr-16`}
+					{...inputProps}
+					type={shown ? "text" : "password"}
+				/>
+				<button
+					type="button"
+					aria-pressed={shown}
+					onClick={() => setShown((value) => !value)}
+					className="absolute top-1/2 right-1.5 -translate-y-1/2 rounded px-2 py-1 text-xs font-medium text-selected-foreground hover:bg-muted"
+				>
+					{t(shown ? "auth.hide" : "auth.show")}
+				</button>
 			</div>
-			{footer && (
-				<div className="text-center text-sm text-muted-foreground">{footer}</div>
+			{hint && (
+				<p id={`${id}-hint`} className="text-xs leading-5 text-muted-foreground">
+					{hint}
+				</p>
 			)}
-			<LanguageSwitch />
-		</main>
+		</div>
+	);
+}
+
+export interface MenuAction {
+	label: string;
+	onSelect?: () => void;
+	href?: string;
+	newTab?: boolean;
+	danger?: boolean;
+	separated?: boolean;
+}
+
+// Uses fixed positioning, so a scrolling table around it can't clip the menu.
+export function ActionsMenu({
+	label,
+	actions,
+}: {
+	label: string;
+	actions: MenuAction[];
+}) {
+	const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
+	const trigger = useRef<HTMLButtonElement>(null);
+	const menu = useRef<HTMLDivElement>(null);
+	const open = position !== null;
+
+	useEffect(() => {
+		if (!open) return;
+		const close = () => setPosition(null);
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				close();
+				trigger.current?.focus();
+			}
+		};
+		const onPointerDown = (event: PointerEvent) => {
+			const target = event.target as Node;
+			if (!menu.current?.contains(target) && !trigger.current?.contains(target)) close();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		document.addEventListener("pointerdown", onPointerDown);
+		window.addEventListener("resize", close);
+		document.addEventListener("scroll", close, true);
+		return () => {
+			document.removeEventListener("keydown", onKeyDown);
+			document.removeEventListener("pointerdown", onPointerDown);
+			window.removeEventListener("resize", close);
+			document.removeEventListener("scroll", close, true);
+		};
+	}, [open]);
+
+	const itemClass = (danger?: boolean) =>
+		`block w-full rounded-md px-2.5 py-[7px] text-left text-[13px] no-underline ${
+			danger
+				? "text-danger-foreground hover:bg-danger-surface"
+				: "text-foreground hover:bg-muted"
+		}`;
+
+	return (
+		<>
+			<button
+				ref={trigger}
+				type="button"
+				aria-label={label}
+				aria-haspopup="menu"
+				aria-expanded={open}
+				className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+				onClick={() => {
+					if (open) {
+						setPosition(null);
+						return;
+					}
+					const rect = trigger.current?.getBoundingClientRect();
+					if (rect) {
+						setPosition({
+							top: Math.min(rect.bottom + 4, window.innerHeight - 260),
+							right: Math.max(8, window.innerWidth - rect.right),
+						});
+					}
+				}}
+			>
+				<MoreHorizontal size={18} aria-hidden="true" />
+			</button>
+			{open && (
+				<div
+					ref={menu}
+					role="menu"
+					aria-label={label}
+					style={{ top: position.top, right: position.right }}
+					className="fixed z-40 min-w-44 rounded-[9px] border border-border bg-card p-1 shadow-lg"
+				>
+					{actions.map((action) => (
+						<div key={action.label}>
+							{action.separated && <div role="separator" className="my-1 h-px bg-border" />}
+							{action.href ? (
+								<a
+									role="menuitem"
+									href={action.href}
+									target={action.newTab ? "_blank" : undefined}
+									rel={action.newTab ? "noopener noreferrer" : undefined}
+									className={itemClass(action.danger)}
+									onClick={() => setPosition(null)}
+								>
+									{action.label}
+								</a>
+							) : (
+								<button
+									type="button"
+									role="menuitem"
+									className={itemClass(action.danger)}
+									onClick={() => {
+										setPosition(null);
+										action.onSelect?.();
+									}}
+								>
+									{action.label}
+								</button>
+							)}
+						</div>
+					))}
+				</div>
+			)}
+		</>
 	);
 }
 

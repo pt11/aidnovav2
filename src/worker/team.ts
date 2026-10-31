@@ -5,8 +5,11 @@ import type { Db } from "./db";
 import {
 	auditLog,
 	departments,
+	fileAccessDepartments,
+	folderAccessDepartments,
 	invitations,
 	organizations,
+	policyAccessDepartments,
 	user,
 	userProfiles,
 } from "./db/schema";
@@ -196,15 +199,36 @@ team.delete(
 		const db = c.get("db");
 		const org = c.get("org");
 		const id = Number(c.req.param("id"));
+		const scope = and(
+			eq(departments.id, id),
+			eq(departments.organizationId, org.organizationId),
+		);
+		// Removing the last department from a limited item would open it to everyone,
+		// so anything it limits has to be changed first.
+		const [[policies], [files], [folders]] = await Promise.all([
+			db
+				.select({ total: count() })
+				.from(policyAccessDepartments)
+				.innerJoin(departments, eq(policyAccessDepartments.departmentId, departments.id))
+				.where(scope),
+			db
+				.select({ total: count() })
+				.from(fileAccessDepartments)
+				.innerJoin(departments, eq(fileAccessDepartments.departmentId, departments.id))
+				.where(scope),
+			db
+				.select({ total: count() })
+				.from(folderAccessDepartments)
+				.innerJoin(departments, eq(folderAccessDepartments.departmentId, departments.id))
+				.where(scope),
+		]);
+		if (policies.total + files.total + folders.total > 0) {
+			return jsonError(c, 409, "DEPARTMENT_IN_USE", "Change what this department limits first.");
+		}
 		// Members and invitations in the department stay, without a department.
 		const deleted = await db
 			.delete(departments)
-			.where(
-				and(
-					eq(departments.id, id),
-					eq(departments.organizationId, org.organizationId),
-				),
-			)
+			.where(scope)
 			.returning({ id: departments.id });
 		if (!deleted.length) {
 			return jsonError(c, 404, "NOT_FOUND", "That department doesn't exist.");

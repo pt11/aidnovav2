@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserPlus } from "lucide-react";
+import { Search, UserPlus } from "lucide-react";
 import {
 	api,
 	ApiError,
@@ -242,6 +242,10 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 	const queryClient = useQueryClient();
 	const [inviteOpen, setInviteOpen] = useState(false);
 	const [changingStatus, setChangingStatus] = useState<Member | null>(null);
+	const [query, setQuery] = useState("");
+	const [roleFilter, setRoleFilter] = useState("all");
+	const [departmentFilter, setDepartmentFilter] = useState("all");
+	const [statusFilter, setStatusFilter] = useState("all");
 	const departments = useDepartments();
 	const members = useQuery({
 		queryKey: QUERY_KEY,
@@ -290,12 +294,56 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 
 	const { members: people, ownerId } = members.data;
 	const deactivating = changingStatus?.isActive ?? false;
+	const text = query.trim().toLowerCase();
+	const visible = people.filter(
+		(person) =>
+			(!text ||
+				person.name.toLowerCase().includes(text) ||
+				person.email.toLowerCase().includes(text)) &&
+			(roleFilter === "all" || person.role === roleFilter) &&
+			(departmentFilter === "all" ||
+				(departmentFilter === "none"
+					? person.departmentId === null
+					: String(person.departmentId) === departmentFilter)) &&
+			(statusFilter === "all" ||
+				person.isActive === (statusFilter === "active")),
+	);
+	const activeCount = people.filter((person) => person.isActive).length;
+	const filterClass =
+		"min-h-9 rounded-md border border-input bg-card px-2 text-[13px]";
+
+	const personCell = (person: Member) => (
+		<div className="flex min-w-0 items-center gap-2.5">
+			<span
+				aria-hidden="true"
+				className={`grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold ${
+					person.isActive
+						? "bg-primary text-primary-foreground"
+						: "bg-muted text-muted-foreground"
+				}`}
+			>
+				{person.name
+					.split(/\s+/)
+					.slice(0, 2)
+					.map((word) => word[0] ?? "")
+					.join("")
+					.toUpperCase()}
+			</span>
+			<span className="min-w-0">
+				<span className="block break-words font-semibold">
+					{person.name}
+					{ownerBadge(person)}
+				</span>
+				<span className="block break-all text-xs text-muted-foreground">{person.email}</span>
+			</span>
+		</div>
+	);
 	const canEdit = (person: Member) =>
 		role === "admin" && person.userId !== ownerId && person.userId !== me.user.id;
 
 	const ownerBadge = (person: Member) =>
 		person.userId === ownerId && (
-			<span className="ml-2 whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-xs font-medium">
+			<span className="ml-2 whitespace-nowrap rounded-full border border-border bg-muted px-[7px] text-[11px] font-semibold">
 				{t("users.owner")}
 			</span>
 		);
@@ -335,7 +383,11 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 					departmentId: event.target.value ? Number(event.target.value) : null,
 				})
 			}
-			className="min-h-9 max-w-44 rounded-md border border-input bg-card px-2 text-sm"
+			className={`min-h-9 max-w-44 rounded-md border bg-card px-2 text-sm ${
+				person.departmentId === null
+					? "border-destructive font-medium text-danger-foreground"
+					: "border-input"
+			}`}
 		>
 			<option value="">{t("users.no_department")}</option>
 			{departments.data?.map((department) => (
@@ -370,7 +422,11 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 		<div className="mx-auto max-w-5xl p-4 md:p-6">
 			<PageHeader
 				title={t("nav.users")}
-				subtitle={t("users.subtitle")}
+				subtitle={t("users.summary", {
+					active: activeCount,
+					inactive: people.length - activeCount,
+					departments: departments.data?.length ?? 0,
+				})}
 				action={
 					<button
 						type="button"
@@ -387,25 +443,79 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 					<Alert>{t("users.role_failed")}</Alert>
 				</div>
 			)}
-			<div className="mt-5 hidden overflow-x-auto rounded-card border border-border bg-card md:block">
+			<div className="mt-4 flex flex-wrap items-center gap-2">
+				<div className="relative min-w-52 flex-1">
+					<Search
+						size={15}
+						aria-hidden="true"
+						className="pointer-events-none absolute top-2.5 left-2.5 text-muted-foreground"
+					/>
+					<input
+						type="search"
+						aria-label={t("users.search")}
+						placeholder={t("users.search")}
+						value={query}
+						onChange={(event) => setQuery(event.target.value)}
+						className="min-h-9 w-full rounded-md border border-input bg-card py-1.5 pr-3 pl-8"
+					/>
+				</div>
+				<select
+					aria-label={t("users.role")}
+					value={roleFilter}
+					onChange={(event) => setRoleFilter(event.target.value)}
+					className={filterClass}
+				>
+					<option value="all">{t("users.all_roles")}</option>
+					{ROLES.map((option) => (
+						<option key={option} value={option}>
+							{t(`role.${option}`)}
+						</option>
+					))}
+				</select>
+				<select
+					aria-label={t("users.department")}
+					value={departmentFilter}
+					onChange={(event) => setDepartmentFilter(event.target.value)}
+					className={filterClass}
+				>
+					<option value="all">{t("users.all_departments")}</option>
+					<option value="none">{t("users.no_department")}</option>
+					{departments.data?.map((department) => (
+						<option key={department.id} value={department.id}>
+							{department.name}
+						</option>
+					))}
+				</select>
+				<select
+					aria-label={t("users.status")}
+					value={statusFilter}
+					onChange={(event) => setStatusFilter(event.target.value)}
+					className={filterClass}
+				>
+					<option value="all">{t("users.all_statuses")}</option>
+					<option value="active">{t("users.active")}</option>
+					<option value="inactive">{t("users.inactive")}</option>
+				</select>
+			</div>
+			{visible.length === 0 && (
+				<p role="status" className="mt-5 rounded-card border border-border bg-card p-5 text-center text-muted-foreground">
+					{t("users.no_results")}
+				</p>
+			)}
+			<div className={`mt-3 hidden overflow-x-auto rounded-card border border-border bg-card ${visible.length ? "md:block" : ""}`}>
 				<table className="w-full text-left text-sm">
 					<thead className="bg-muted text-xs text-muted-foreground">
 						<tr>
 							<th scope="col" className="px-4 py-2.5 font-semibold">{t("users.name")}</th>
-							<th scope="col" className="px-4 py-2.5 font-semibold">{t("users.email")}</th>
 							<th scope="col" className="px-4 py-2.5 font-semibold">{t("users.role")}</th>
 							<th scope="col" className="px-4 py-2.5 font-semibold">{t("users.department")}</th>
 							<th scope="col" className="px-4 py-2.5 font-semibold">{t("users.status")}</th>
 						</tr>
 					</thead>
 					<tbody>
-						{people.map((person) => (
+						{visible.map((person) => (
 							<tr key={person.userId} className="border-t border-border">
-								<td className="px-4 py-3 font-medium">
-									{person.name}
-									{ownerBadge(person)}
-								</td>
-								<td className="break-all px-4 py-3 text-muted-foreground">{person.email}</td>
+								<td className="px-4 py-3">{personCell(person)}</td>
 								<td className="px-4 py-3">{roleControl(person)}</td>
 								<td className="px-4 py-3">{departmentControl(person)}</td>
 								<td className="px-4 py-3">{statusControl(person)}</td>
@@ -414,17 +524,13 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 					</tbody>
 				</table>
 			</div>
-			<ul className="mt-5 flex flex-col gap-3 md:hidden">
-				{people.map((person) => (
+			<ul className="mt-3 flex flex-col gap-3 md:hidden">
+				{visible.map((person) => (
 					<li
 						key={person.userId}
 						className="rounded-card border border-border bg-card p-4 text-sm"
 					>
-						<p className="font-medium">
-							{person.name}
-							{ownerBadge(person)}
-						</p>
-						<p className="mt-0.5 break-all text-muted-foreground">{person.email}</p>
+						{personCell(person)}
 						<dl className="mt-3 flex flex-col gap-2">
 							{[
 								{ label: t("users.role"), value: roleControl(person) },
