@@ -950,7 +950,7 @@ function Pricing() {
 				{yearly
 					? "Yearly plans cost the same as 10 months."
 					: "Prices in USD per organization."}{" "}
-				Need more than 100 users? <a href={`mailto:${CONTACT_EMAIL}`}>Talk to us</a>.
+				Need more than 100 users? Add 25 users for $10 a month, or <a href={`mailto:${CONTACT_EMAIL}`}>talk to us</a> above 300.
 			</p>
 		</section>
 	);
@@ -975,7 +975,7 @@ const FAQS = [
 	{
 		question: "How many staff can we add?",
 		answer:
-			"Basic covers up to 50 users and Plus up to 100. For larger teams, talk to us.",
+			"Basic covers up to 50 users and Plus up to 100. You can add 25 more users for $10 a month. Above 300 users, talk to us.",
 	},
 	{
 		question: "What happens when the trial ends?",

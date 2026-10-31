@@ -1238,7 +1238,7 @@ describe("files", () => {
 		assert.equal((await programs.request("/api/files/usage")).status, 403);
 		const { data } = await outsider.request("/api/files/usage");
 		assert.equal(data.usedBytes, 0);
-		assert.equal(data.limitBytes, 5 * 1024 * 1024 * 1024);
+		assert.equal(data.limitBytes, 25 * 1024 * 1024 * 1024);
 	});
 });
 
@@ -1390,5 +1390,222 @@ describe("assistant", () => {
 		});
 		assert.equal(status, 200);
 		assert.equal((await ask(member, "Hello?")).status, 429);
+	});
+});
+
+describe("plans and platform admin", () => {
+	let platform, admin, staff, outsider, orgId, otherOrgId, basicId, plusId;
+	const CURRENT = "/api/organizations/current";
+	const invite = (client, label) =>
+		client.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: `${label}-${RUN}@example.test`, role: "staff" },
+		});
+	const setOrg = (id, body) =>
+		platform.request(`/api/superadmin/organizations/${id}`, { method: "PATCH", body });
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("platform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("planadmin");
+		staff = await new Client().signUpAndIn("planstaff");
+		outsider = await new Client().signUpAndIn("planout");
+		orgId = (await admin.createOrg("mu")).data.id;
+		otherOrgId = (await outsider.createOrg("nu")).data.id;
+		addMember(staff.userId, orgId, "staff");
+		const { data } = await platform.request("/api/superadmin/plans");
+		basicId = data.plans.find((p) => p.name === "Basic").id;
+		plusId = data.plans.find((p) => p.name === "Plus").id;
+	});
+
+	test("every platform route refuses everyone else", async () => {
+		const routes = [
+			["GET", "/api/superadmin/overview"],
+			["GET", "/api/superadmin/organizations"],
+			["PATCH", `/api/superadmin/organizations/${orgId}`],
+			["POST", "/api/superadmin/upgrade-requests/1/approve"],
+			["GET", "/api/superadmin/users"],
+			["PATCH", `/api/superadmin/users/${staff.userId}`],
+			["GET", "/api/superadmin/plans"],
+			["POST", "/api/superadmin/plans"],
+			["PATCH", `/api/superadmin/plans/${basicId}`],
+			["DELETE", `/api/superadmin/plans/${basicId}`],
+		];
+		for (const [method, path] of routes) {
+			const body = method === "GET" || method === "DELETE" ? undefined : { status: "active" };
+			assert.equal((await admin.request(path, { method, body })).status, 403, path);
+			assert.equal((await new Client().request(path, { method, body })).status, 401, path);
+		}
+	});
+
+	test("the plans match the agreed pricing", async () => {
+		const { data } = await platform.request("/api/superadmin/plans");
+		const basic = data.plans.find((p) => p.id === basicId);
+		const plus = data.plans.find((p) => p.id === plusId);
+		assert.deepEqual(
+			[basic.monthlyPrice, basic.yearlyPrice, basic.maxUsers, basic.storageLimitGb],
+			[3000, 30000, 50, 25],
+		);
+		assert.deepEqual(
+			[plus.monthlyPrice, plus.yearlyPrice, plus.maxUsers, plus.storageLimitGb],
+			[6000, 60000, 100, 50],
+		);
+	});
+
+	test("limits come from the plan plus user blocks, or a custom quote", async () => {
+		const plan = async () => (await admin.request(`${CURRENT}/plan`)).data;
+		assert.equal((await plan()).maxUsers, 50);
+		await setOrg(orgId, { planId: plusId, extraUserBlocks: 2 });
+		const withBlocks = await plan();
+		assert.equal(withBlocks.maxUsers, 150);
+		assert.equal(withBlocks.storageLimitBytes, 70 * 1024 ** 3);
+		await setOrg(orgId, { customMaxUsers: 400, customStorageGb: 200 });
+		const custom = await plan();
+		assert.equal(custom.maxUsers, 400);
+		assert.equal(custom.storageLimitBytes, 200 * 1024 ** 3);
+		await setOrg(orgId, { customMaxUsers: null, customStorageGb: null, planId: null, extraUserBlocks: 0 });
+		assert.equal((await plan()).maxUsers, 50);
+		assert.equal((await staff.request(`${CURRENT}/plan`)).status, 403);
+	});
+
+	test("invitations stop at the user limit, and nobody is removed", async () => {
+		const owner = await new Client().signUpAndIn("limitowner");
+		const id = (await owner.createOrg("limit")).data.id;
+		await setOrg(id, { customMaxUsers: 2 });
+		assert.equal((await invite(owner, "first")).status, 201);
+		const full = await invite(owner, "second");
+		assert.equal(full.data.code, "USER_LIMIT");
+		assert.equal((await invite(owner, "first")).status, 201);
+		sql(`UPDATE invitations SET expires_at = 1000 WHERE organization_id = ${id}`);
+		assert.equal((await invite(owner, "second")).status, 201);
+		await setOrg(id, { customMaxUsers: 1 });
+		const { data } = await owner.request(`${CURRENT}/members`);
+		assert.equal(data.members.length, 1);
+	});
+
+	test("an invitation can't be accepted past the limit, or a member reactivated", async () => {
+		const owner = await new Client().signUpAndIn("seatowner");
+		const joiner = await new Client().signUpAndIn("seatjoiner");
+		const id = (await owner.createOrg("seats")).data.id;
+		await owner.request(`${CURRENT}/invitations`, {
+			method: "POST",
+			body: { email: joiner.email, role: "staff" },
+		});
+		const token = `seat-${RUN}`;
+		const hash = createHash("sha256").update(token).digest("hex");
+		sql(`UPDATE invitations SET token_hash = '${hash}' WHERE email = '${joiner.email}'`);
+		await setOrg(id, { customMaxUsers: 1 });
+		const refused = await joiner.request("/api/invitations/accept", { method: "POST", body: { token } });
+		assert.equal(refused.data.code, "USER_LIMIT");
+
+		await setOrg(id, { customMaxUsers: 2 });
+		assert.equal((await joiner.request("/api/invitations/accept", { method: "POST", body: { token } })).status, 200);
+		await owner.request(`${CURRENT}/members/${joiner.userId}/status`, { method: "PATCH", body: { isActive: false } });
+		await setOrg(id, { customMaxUsers: 1 });
+		const back = await owner.request(`${CURRENT}/members/${joiner.userId}/status`, { method: "PATCH", body: { isActive: true } });
+		assert.equal(back.data.code, "USER_LIMIT");
+	});
+
+	test("uploads stop at the storage limit", async () => {
+		const owner = await new Client().signUpAndIn("storeowner");
+		const id = (await owner.createOrg("store")).data.id;
+		await setOrg(id, { customStorageGb: 0 });
+		const full = await owner.fileRequest("/api/files/upload?name=a.pdf", { method: "POST", body: Buffer.from("x") });
+		assert.equal(full.data.code, "STORAGE_FULL");
+		await setOrg(id, { customStorageGb: 1 });
+		const fits = await owner.fileRequest("/api/files/upload?name=a.pdf", { method: "POST", body: Buffer.from("x") });
+		assert.equal(fits.status, 201);
+		const usage = await owner.request("/api/files/usage");
+		assert.equal(usage.data.limitBytes, 1024 ** 3);
+	});
+
+	test("an upgrade request goes from admin to approval, one at a time", async () => {
+		const send = (client, body) =>
+			client.request(`${CURRENT}/upgrade-request`, { method: "POST", body });
+		const good = { planId: plusId, billingCycle: "yearly", extraUserBlocks: 2, message: "Please" };
+		assert.equal((await send(staff, good)).status, 403);
+		assert.equal((await send(admin, { ...good, planId: 99999 })).data.code, "INVALID_PLAN");
+		assert.equal((await send(admin, { ...good, extraUserBlocks: -1 })).status, 400);
+		assert.equal((await send(admin, good)).status, 201);
+		assert.equal((await send(admin, good)).data.code, "REQUEST_PENDING");
+
+		const { data } = await platform.request("/api/superadmin/organizations");
+		const row = data.organizations.find((o) => o.id === orgId);
+		assert.equal(row.request.message, "Please");
+		assert.ok(!data.organizations.find((o) => o.id === otherOrgId).request);
+
+		assert.equal(
+			(await platform.request("/api/superadmin/upgrade-requests/" + row.request.id + "/nonsense", { method: "POST" })).status,
+			404,
+		);
+		const approved = await platform.request(`/api/superadmin/upgrade-requests/${row.request.id}/approve`, { method: "POST" });
+		assert.equal(approved.status, 200);
+		const plan = (await admin.request(`${CURRENT}/plan`)).data;
+		assert.equal(plan.status, "active");
+		assert.equal(plan.planName, "Plus");
+		assert.equal(plan.billingCycle, "yearly");
+		assert.equal(plan.maxUsers, 150);
+		assert.equal(plan.pendingRequest, null);
+		const twice = await platform.request(`/api/superadmin/upgrade-requests/${row.request.id}/approve`, { method: "POST" });
+		assert.equal(twice.status, 404);
+	});
+
+	test("activating restores an expired organization, and suspending blocks it", async () => {
+		const owner = await new Client().signUpAndIn("expiredowner");
+		const id = (await owner.createOrg("expiring")).data.id;
+		sql(`UPDATE organizations SET trial_end_date = 1000 WHERE id = ${id}`);
+		const blocked = await owner.request("/api/announcements");
+		assert.equal(blocked.data.code, "TRIAL_EXPIRED");
+		assert.equal((await setOrg(id, { status: "active", planId: basicId, paidUntil: "2027-01-31" })).status, 200);
+		assert.equal((await owner.request("/api/announcements")).status, 200);
+		await setOrg(id, { status: "suspended" });
+		assert.equal((await owner.request("/api/announcements")).data.code, "ORG_BLOCKED");
+		await setOrg(id, { status: "active" });
+		assert.equal((await owner.request("/api/announcements")).status, 200);
+		assert.equal((await setOrg(id, { status: "nonsense" })).status, 400);
+		assert.equal((await setOrg(id, { planId: 99999 })).status, 400);
+		assert.equal((await setOrg(id, { paidUntil: "soon" })).status, 400);
+		assert.equal((await setOrg(99999999, { status: "active" })).status, 404);
+	});
+
+	test("deactivating a user signs them out everywhere, with protected accounts", async () => {
+		const target = await new Client().signUpAndIn("plandeactivate");
+		const change = (id, isActive) =>
+			platform.request(`/api/superadmin/users/${id}`, { method: "PATCH", body: { isActive } });
+		assert.equal((await target.request("/api/me")).status, 200);
+		assert.equal((await change(target.userId, false)).status, 200);
+		assert.equal((await target.request("/api/me")).status, 401);
+		const again = await target.request("/api/auth/sign-in/email", {
+			method: "POST",
+			body: { email: target.email, password: PASSWORD },
+		});
+		if (again.status === 200) assert.equal((await target.request("/api/me")).status, 403);
+		assert.equal((await change(target.userId, true)).status, 200);
+
+		assert.equal((await change(platform.userId, false)).data.code, "SELF_LOCKED");
+		const other = await new Client().signUpAndIn("platformtwo");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${other.userId}'`);
+		assert.equal((await change(other.userId, false)).data.code, "PROTECTED");
+	});
+
+	test("a plan in use can't be deleted, and search finds people", async () => {
+		const { data: created } = await platform.request("/api/superadmin/plans", {
+			method: "POST",
+			body: { name: `Temp ${RUN}`, description: "", monthlyPrice: 100, yearlyPrice: 1000, maxUsers: null, storageLimitGb: null, sortOrder: 9, isActive: true },
+		});
+		await setOrg(otherOrgId, { planId: created.id });
+		const inUse = await platform.request(`/api/superadmin/plans/${created.id}`, { method: "DELETE" });
+		assert.equal(inUse.data.code, "PLAN_IN_USE");
+		await setOrg(otherOrgId, { planId: null });
+		assert.equal((await platform.request(`/api/superadmin/plans/${created.id}`, { method: "DELETE" })).status, 200);
+		const bad = await platform.request("/api/superadmin/plans", { method: "POST", body: { name: "" } });
+		assert.equal(bad.status, 400);
+
+		const found = await platform.request(`/api/superadmin/users?q=${encodeURIComponent(admin.email)}`);
+		assert.deepEqual(found.data.users.map((u) => u.id), [admin.userId]);
+		assert.equal(found.data.users[0].organizations[0].role, "admin");
+		const overview = await platform.request("/api/superadmin/overview");
+		assert.ok(overview.data.users >= 1);
+		assert.equal(typeof overview.data.organizations.trial, "number");
 	});
 });

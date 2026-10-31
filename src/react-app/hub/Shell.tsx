@@ -335,6 +335,14 @@ function SidebarContent({
 				))}
 			</nav>
 			<div className="flex flex-col gap-3 px-3 pt-2 pb-3">
+				{me.user.isSuperAdmin && (
+					<Link
+						href="/superadmin"
+						className="rounded-[9px] border border-border px-3 py-2 text-xs font-semibold text-foreground no-underline hover:bg-muted"
+					>
+						{t("shell.platform_admin")}
+					</Link>
+				)}
 				<TrialCard org={org} />
 				<div className="flex items-center gap-2.5 p-1">
 					<span

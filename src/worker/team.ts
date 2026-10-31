@@ -23,6 +23,7 @@ import {
 	type AppEnv,
 	type Role,
 } from "./middleware";
+import { getOrgLimits, getSeatUsage } from "./plans";
 import { cleanText, isEmail, readJson } from "./validate";
 
 const ROLES: Role[] = ["staff", "manager", "admin"];
@@ -71,6 +72,15 @@ async function findDepartment(
 }
 
 export const team = new Hono<AppEnv>();
+
+// Counts pending invitations too. Stops new people joining, and never removes anyone.
+async function isOrgFull(db: Db, organizationId: number) {
+	const [limits, seats] = await Promise.all([
+		getOrgLimits(db, organizationId),
+		getSeatUsage(db, organizationId),
+	]);
+	return limits.maxUsers !== null && seats.active + seats.pending >= limits.maxUsers;
+}
 
 team.get(
 	"/organizations/current/departments",
@@ -295,6 +305,20 @@ team.patch(
 			return jsonError(c, 403, "SELF_LOCKED", "You can't deactivate yourself.");
 		}
 		const db = c.get("db");
+		if (isActive) {
+			const [member] = await db
+				.select({ isActive: userProfiles.isActive })
+				.from(userProfiles)
+				.where(
+					and(
+						eq(userProfiles.userId, targetUserId),
+						eq(userProfiles.organizationId, org.organizationId),
+					),
+				);
+			if (member && !member.isActive && (await isOrgFull(db, org.organizationId))) {
+				return jsonError(c, 409, "USER_LIMIT", "Your plan's user limit has been reached.");
+			}
+		}
 		const updated = await db
 			.update(userProfiles)
 			.set({ isActive })
@@ -399,6 +423,10 @@ team.post(
 			);
 		if (existing && org.role !== "admin" && existing.role !== "staff") {
 			return jsonError(c, 403, "FORBIDDEN", "Only admins can change that invitation.");
+		}
+
+		if (!existing && (await isOrgFull(db, org.organizationId))) {
+			return jsonError(c, 409, "USER_LIMIT", "Your plan's user limit has been reached.");
 		}
 
 		const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -550,6 +578,14 @@ team.post("/invitations/accept", requireUser, async (c) => {
 	}
 	if (currentUser.email.toLowerCase() !== invite.email) {
 		return jsonError(c, 403, "WRONG_ACCOUNT", "That invitation is for a different email address.");
+	}
+	// The invitation itself is already counted, so only people already in matter.
+	const [limits, seats] = await Promise.all([
+		getOrgLimits(db, invite.organizationId),
+		getSeatUsage(db, invite.organizationId),
+	]);
+	if (limits.maxUsers !== null && seats.active >= limits.maxUsers) {
+		return jsonError(c, 409, "USER_LIMIT", "This organization's user limit has been reached.");
 	}
 
 	try {

@@ -814,13 +814,12 @@ function StorageUsage() {
 	const { t } = useI18n();
 	const usage = useQuery({
 		queryKey: USAGE_KEY,
-		queryFn: () => api<{ usedBytes: number; limitBytes: number }>("/files/usage"),
+		queryFn: () => api<{ usedBytes: number; limitBytes: number | null }>("/files/usage"),
 	});
-	if (!usage.data) return null;
-	const percent = Math.min(
-		100,
-		Math.round((usage.data.usedBytes / usage.data.limitBytes) * 100),
-	);
+	if (!usage.data || usage.data.limitBytes === null) return null;
+	const percent = usage.data.limitBytes
+		? Math.min(100, Math.round((usage.data.usedBytes / usage.data.limitBytes) * 100))
+		: 100;
 	return (
 		<div className="mt-4 flex items-center gap-3 text-xs text-muted-foreground">
 			<span

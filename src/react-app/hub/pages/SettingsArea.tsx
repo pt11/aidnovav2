@@ -25,6 +25,7 @@ import {
 	PageError,
 	PageLoading,
 	PasswordField,
+	SelectField,
 	TextareaField,
 } from "../ui";
 
@@ -72,6 +73,7 @@ function SettingsLayout({
 						links: [
 							{ href: "/settings", label: "settings.general" },
 							{ href: "/settings/departments", label: "settings.departments" },
+							{ href: "/settings/plan", label: "plan.title" },
 						],
 					},
 				]
@@ -263,6 +265,287 @@ function GeneralForm({
 				</div>
 			)}
 		</form>
+	);
+}
+
+interface PlanOption {
+	id: number;
+	name: string;
+	description: string | null;
+	monthlyPrice: number;
+	yearlyPrice: number;
+	maxUsers: number | null;
+	storageLimitGb: number | null;
+}
+
+interface PlanInfo {
+	status: "trial" | "active" | "suspended" | "cancelled";
+	trialEndDate: string | null;
+	billingCycle: "monthly" | "yearly";
+	extraUserBlocks: number;
+	paidUntil: string | null;
+	planName: string | null;
+	maxUsers: number | null;
+	storageLimitBytes: number | null;
+	seats: { active: number; pending: number };
+	storageUsed: number;
+	plans: PlanOption[];
+	pendingRequest: {
+		planName: string | null;
+		billingCycle: "monthly" | "yearly";
+		extraUserBlocks: number;
+		createdAt: string;
+	} | null;
+	blockPriceCents: number;
+	usersPerBlock: number;
+}
+
+const PLAN_KEY = ["organization-plan"];
+
+function formatStorage(bytes: number) {
+	if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function dollars(cents: number) {
+	return `$${(cents / 100).toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+}
+
+function UsageBar({ percent, label }: { percent: number; label: string }) {
+	return (
+		<div
+			role="progressbar"
+			aria-valuenow={percent}
+			aria-valuemin={0}
+			aria-valuemax={100}
+			aria-label={label}
+			className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
+		>
+			<div
+				className={`h-full rounded-full ${percent >= 90 ? "bg-destructive" : "bg-primary"}`}
+				style={{ width: `${percent}%` }}
+			/>
+		</div>
+	);
+}
+
+function UpgradeForm({ info, canRequest }: { info: PlanInfo; canRequest: boolean }) {
+	const { t } = useI18n();
+	const queryClient = useQueryClient();
+	const needed = info.seats.active + info.seats.pending;
+	const fitting =
+		info.plans.find((plan) => plan.maxUsers === null || plan.maxUsers >= needed) ??
+		info.plans[info.plans.length - 1];
+	const [planId, setPlanId] = useState(fitting?.id ?? 0);
+	const [cycle, setCycle] = useState<"monthly" | "yearly">("monthly");
+	const [blocks, setBlocks] = useState(0);
+	const [message, setMessage] = useState("");
+	const send = useMutation({
+		mutationFn: () =>
+			api("/organizations/current/upgrade-request", {
+				method: "POST",
+				body: { planId, billingCycle: cycle, extraUserBlocks: blocks, message },
+			}),
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: PLAN_KEY }),
+	});
+	const plan = info.plans.find((option) => option.id === planId);
+	const monthly = plan ? plan.monthlyPrice + blocks * info.blockPriceCents : 0;
+	const yearly = plan ? plan.yearlyPrice + blocks * info.blockPriceCents * 10 : 0;
+
+	function submit(event: FormEvent) {
+		event.preventDefault();
+		send.mutate();
+	}
+
+	return (
+		<form onSubmit={submit} className="flex flex-col gap-3.5 rounded-card border border-border bg-card p-5">
+			<h3 className="text-[15px] font-semibold">{t("plan.choose")}</h3>
+			{send.isError && <Alert>{t("error.generic")}</Alert>}
+			<div role="group" aria-label={t("plan.billing")} className="inline-flex self-start rounded-md border border-border bg-muted p-0.5">
+				{(["monthly", "yearly"] as const).map((option) => (
+					<button
+						key={option}
+						type="button"
+						aria-pressed={cycle === option}
+						onClick={() => setCycle(option)}
+						className={`rounded px-3 py-1 text-[13px] font-medium ${
+							cycle === option ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+						}`}
+					>
+						{t(`plan.${option}`)}
+					</button>
+				))}
+			</div>
+			<div className="grid gap-3 sm:grid-cols-2">
+				{info.plans.map((option) => (
+					<label
+						key={option.id}
+						className={`flex cursor-pointer items-start gap-2.5 rounded-[9px] p-3 ${
+							planId === option.id ? "border-2 border-primary" : "border border-input"
+						}`}
+					>
+						<input
+							type="radio"
+							name="plan-choice"
+							className="mt-1 accent-primary"
+							checked={planId === option.id}
+							onChange={() => setPlanId(option.id)}
+						/>
+						<span className="min-w-0">
+							<span className="block font-semibold">{option.name}</span>
+							<span className="block font-medium">
+								{cycle === "monthly"
+									? t("plan.per_month", { price: dollars(option.monthlyPrice) })
+									: t("plan.per_year", { price: dollars(option.yearlyPrice) })}
+							</span>
+							<span className="block text-[13px] text-muted-foreground">
+								{t("plan.includes", {
+									users: option.maxUsers ?? "∞",
+									storage: option.storageLimitGb ?? "∞",
+								})}
+							</span>
+						</span>
+					</label>
+				))}
+			</div>
+			<SelectField
+				label={t("plan.extra_users")}
+				value={blocks}
+				onChange={(event) => setBlocks(Number(event.target.value))}
+			>
+				{Array.from({ length: 9 }, (_, count) => (
+					<option key={count} value={count}>
+						{count === 0
+							? t("plan.no_extra")
+							: t("plan.extra_option", {
+									users: count * info.usersPerBlock,
+									price: dollars(count * info.blockPriceCents),
+								})}
+					</option>
+				))}
+			</SelectField>
+			{plan && (
+				<p className="font-semibold">
+					{t("plan.total")}:{" "}
+					{cycle === "monthly"
+						? t("plan.per_month", { price: dollars(monthly) })
+						: t("plan.per_year", { price: dollars(yearly) })}
+				</p>
+			)}
+			<TextareaField
+				label={t("plan.message")}
+				rows={2}
+				maxLength={1000}
+				value={message}
+				onChange={(event) => setMessage(event.target.value)}
+			/>
+			<p className="text-[13px] text-muted-foreground">{t("plan.no_payment")}</p>
+			{canRequest ? (
+				<button type="submit" disabled={send.isPending || !plan} className={buttonClass("primary", "self-start")}>
+					{t("plan.send")}
+				</button>
+			) : (
+				<p className="text-[13px] font-medium">{t("plan.admin_only")}</p>
+			)}
+		</form>
+	);
+}
+
+export function SettingsPlanPage({ org }: { org: Membership }) {
+	const { t, language } = useI18n();
+	const plan = useQuery({
+		queryKey: PLAN_KEY,
+		queryFn: () => api<PlanInfo>("/organizations/current/plan"),
+	});
+	const data = plan.data;
+	const used = data ? data.seats.active + data.seats.pending : 0;
+	const date = (value: string) =>
+		new Date(value).toLocaleDateString(language, { dateStyle: "long" });
+	return (
+		<SettingsLayout canManage title={t("plan.title")} subtitle={t("plan.desc")}>
+			{plan.isPending && <PageLoading />}
+			{plan.isError && <PageError onRetry={() => plan.refetch()} />}
+			{data && (
+				<>
+					<section className="rounded-card border border-border bg-card p-5">
+						<p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+							{t("plan.current")}
+						</p>
+						<p className="mt-1 text-lg font-semibold">
+							{data.planName ?? t("shell.free_trial")}
+							{data.planName && ` · ${t(`plan.${data.billingCycle}`)}`}
+						</p>
+						{data.status === "trial" && data.trialEndDate && (
+							<p className="text-[13px] text-muted-foreground">
+								{t("plan.trial_ends", { date: date(data.trialEndDate) })}
+							</p>
+						)}
+						{data.paidUntil && (
+							<p className="text-[13px] text-muted-foreground">
+								{t("plan.paid_until", { date: date(data.paidUntil) })}
+							</p>
+						)}
+					</section>
+					<section className="grid gap-4 rounded-card border border-border bg-card p-5 sm:grid-cols-2">
+						<div>
+							<p className="font-semibold">{t("departments.staff")}</p>
+							<p className="text-[13px] text-muted-foreground">
+								{data.maxUsers === null
+									? t("plan.seats_unlimited", { used })
+									: t("plan.seats", { used, limit: data.maxUsers })}
+							</p>
+							{data.maxUsers !== null && data.maxUsers > 0 && (
+								<UsageBar
+									percent={Math.min(100, Math.round((used / data.maxUsers) * 100))}
+									label={t("departments.staff")}
+								/>
+							)}
+							<p className="mt-1 text-xs text-muted-foreground">
+								{t("plan.seats_detail", {
+									active: data.seats.active,
+									pending: data.seats.pending,
+								})}
+							</p>
+						</div>
+						<div>
+							<p className="font-semibold">{t("files.storage")}</p>
+							<p className="text-[13px] text-muted-foreground">
+								{data.storageLimitBytes === null
+									? formatStorage(data.storageUsed)
+									: t("files.storage_used", {
+											used: formatStorage(data.storageUsed),
+											limit: formatStorage(data.storageLimitBytes),
+										})}
+							</p>
+							{data.storageLimitBytes !== null && data.storageLimitBytes > 0 && (
+								<UsageBar
+									percent={Math.min(
+										100,
+										Math.round((data.storageUsed / data.storageLimitBytes) * 100),
+									)}
+									label={t("files.storage")}
+								/>
+							)}
+						</div>
+					</section>
+					{data.pendingRequest ? (
+						<section role="status" className="rounded-card border border-border bg-selected p-5">
+							<p className="font-semibold">{t("plan.request_waiting")}</p>
+							<p className="mt-1 text-[13px]">
+								{t("plan.request_detail", {
+									plan: data.pendingRequest.planName ?? "",
+									cycle: t(`plan.${data.pendingRequest.billingCycle}`),
+									date: date(data.pendingRequest.createdAt),
+								})}
+							</p>
+						</section>
+					) : (
+						<UpgradeForm info={data} canRequest={org.role === "admin"} />
+					)}
+				</>
+			)}
+		</SettingsLayout>
 	);
 }
 

@@ -16,6 +16,7 @@ const ERROR_KEYS: Record<string, string> = {
 	WRONG_ACCOUNT: "invite.wrong_account",
 	ALREADY_MEMBER: "invite.already_member",
 	NOT_FOUND: "invite.invalid_desc",
+	USER_LIMIT: "plan.invite_full",
 };
 
 export function InvitePage({ me }: { me: Me | null }) {

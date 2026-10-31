@@ -47,6 +47,7 @@ const INVITE_ERRORS: Record<string, string> = {
 	ALREADY_MEMBER: "invite.error_member",
 	INVALID_EMAIL: "form.invalid_email",
 	TOO_MANY_INVITES: "invite.error_limit",
+	USER_LIMIT: "plan.user_limit",
 	EMAIL_FAILED: "invite.error_email",
 };
 
@@ -570,6 +571,12 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 				open={changingStatus !== null}
 				pending={changeStatus.isPending}
 				failed={changeStatus.isError}
+				failedMessage={
+					changeStatus.error instanceof ApiError &&
+					changeStatus.error.code === "USER_LIMIT"
+						? t("plan.user_limit")
+						: undefined
+				}
 				onConfirm={() => changingStatus && changeStatus.mutate(changingStatus)}
 				onClose={() => setChangingStatus(null)}
 			/>

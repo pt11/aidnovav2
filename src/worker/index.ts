@@ -3,8 +3,10 @@ import { assistantRoutes } from "./assistant";
 import { createAuth } from "./auth";
 import { requireSameOrigin, withDb, type AppEnv } from "./middleware";
 import { fileRoutes } from "./files";
+import { planRoutes } from "./plans";
 import { policyRoutes } from "./policies";
 import { api } from "./routes";
+import { superadminRoutes } from "./superadmin";
 import { team } from "./team";
 import { workspace } from "./workspace";
 
@@ -21,6 +23,8 @@ app.route("/api", workspace);
 app.route("/api", policyRoutes);
 app.route("/api", fileRoutes);
 app.route("/api", assistantRoutes);
+app.route("/api", planRoutes);
+app.route("/api", superadminRoutes);
 
 app.notFound((c) => c.json({ code: "NOT_FOUND", message: "Not found." }, 404));
 

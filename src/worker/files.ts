@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gt, inArray, sum } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { hashPassword, verifyPassword } from "./auth";
 import type { Db } from "./db";
@@ -20,11 +20,11 @@ import {
 	type AppEnv,
 	type Membership,
 } from "./middleware";
+import { getOrgLimits, getStorageUsed } from "./plans";
 import { getOwnDepartmentId } from "./policies";
 import { cleanText, isSafeLink, readJson } from "./validate";
 
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
-const MAX_ORG_BYTES = 5 * 1024 * 1024 * 1024;
 const UNLOCK_MS = 10 * 60 * 1000;
 const PIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_PIN_FAILURES = 10;
@@ -515,12 +515,13 @@ fileRoutes.get(
 	requireOrg,
 	requireManager,
 	async (c) => {
-		const [row] = await c
-			.get("db")
-			.select({ used: sum(orgFiles.sizeBytes) })
-			.from(orgFiles)
-			.where(eq(orgFiles.organizationId, c.get("org").organizationId));
-		return c.json({ usedBytes: Number(row.used ?? 0), limitBytes: MAX_ORG_BYTES });
+		const db = c.get("db");
+		const organizationId = c.get("org").organizationId;
+		const [usedBytes, limits] = await Promise.all([
+			getStorageUsed(db, organizationId),
+			getOrgLimits(db, organizationId),
+		]);
+		return c.json({ usedBytes, limitBytes: limits.storageLimitBytes });
 	},
 );
 
@@ -558,11 +559,14 @@ fileRoutes.post(
 		) {
 			return jsonError(c, 400, "INVALID_FOLDER", "Choose a valid folder.");
 		}
-		const [usage] = await db
-			.select({ used: sum(orgFiles.sizeBytes) })
-			.from(orgFiles)
-			.where(eq(orgFiles.organizationId, org.organizationId));
-		if (Number(usage.used ?? 0) + declaredSize > MAX_ORG_BYTES) {
+		const [used, limits] = await Promise.all([
+			getStorageUsed(db, org.organizationId),
+			getOrgLimits(db, org.organizationId),
+		]);
+		if (
+			limits.storageLimitBytes !== null &&
+			used + declaredSize > limits.storageLimitBytes
+		) {
 			return jsonError(c, 413, "STORAGE_FULL", "Your organization's storage is full.");
 		}
 

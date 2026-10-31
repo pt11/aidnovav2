@@ -213,6 +213,7 @@ export function ConfirmModal({
 	open,
 	pending,
 	failed,
+	failedMessage,
 	onConfirm,
 	onClose,
 }: {
@@ -222,6 +223,7 @@ export function ConfirmModal({
 	open: boolean;
 	pending: boolean;
 	failed: boolean;
+	failedMessage?: string;
 	onConfirm: () => void;
 	onClose: () => void;
 }) {
@@ -230,7 +232,7 @@ export function ConfirmModal({
 		<Modal title={title} description={description} open={open} onClose={onClose}>
 			{failed && (
 				<div className="mb-4">
-					<Alert>{t("error.generic")}</Alert>
+					<Alert>{failedMessage ?? t("error.generic")}</Alert>
 				</div>
 			)}
 			<div className="flex justify-end gap-2">

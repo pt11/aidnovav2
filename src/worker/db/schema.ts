@@ -103,6 +103,20 @@ export const rateLimit = sqliteTable("rate_limit", {
 
 // AidNova tables. Integer ids and column names follow v1 so existing
 // organizations can be imported later.
+// Prices are in US cents. A null limit means no limit.
+export const subscriptionPlans = sqliteTable("subscription_plans", {
+	id: integer("id").primaryKey({ autoIncrement: true }),
+	name: text("name").notNull(),
+	description: text("description"),
+	monthlyPrice: integer("monthly_price").notNull().default(0),
+	yearlyPrice: integer("yearly_price").notNull().default(0),
+	maxUsers: integer("max_users"),
+	storageLimitGb: integer("storage_limit_gb"),
+	isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+	sortOrder: integer("sort_order").notNull().default(0),
+	createdAt: createdAt(),
+});
+
 export const organizations = sqliteTable("organizations", {
 	id: integer("id").primaryKey({ autoIncrement: true }),
 	name: text("name").notNull(),
@@ -127,6 +141,15 @@ export const organizations = sqliteTable("organizations", {
 	billingCycle: text("billing_cycle", { enum: ["monthly", "yearly"] })
 		.notNull()
 		.default("monthly"),
+	planId: integer("plan_id").references(() => subscriptionPlans.id, {
+		onDelete: "set null",
+	}),
+	// Each block adds 25 users and 10 GB. The custom limits are for custom quotes.
+	extraUserBlocks: integer("extra_user_blocks").notNull().default(0),
+	customMaxUsers: integer("custom_max_users"),
+	customStorageGb: integer("custom_storage_gb"),
+	// For the team's records. Billing happens outside the app.
+	paidUntil: integer("paid_until", { mode: "timestamp_ms" }),
 	createdAt: createdAt(),
 });
 
@@ -434,6 +457,41 @@ export const assistantUsage = sqliteTable(
 	(table) => [
 		index("assistant_usage_org_idx").on(table.organizationId, table.createdAt),
 		index("assistant_usage_user_idx").on(table.userId, table.createdAt),
+	],
+);
+
+export const upgradeRequests = sqliteTable(
+	"upgrade_requests",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		requestedBy: text("requested_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		planId: integer("plan_id").references(() => subscriptionPlans.id, {
+			onDelete: "set null",
+		}),
+		billingCycle: text("billing_cycle", { enum: ["monthly", "yearly"] })
+			.notNull()
+			.default("monthly"),
+		extraUserBlocks: integer("extra_user_blocks").notNull().default(0),
+		message: text("message"),
+		status: text("status", { enum: ["pending", "approved", "dismissed"] })
+			.notNull()
+			.default("pending"),
+		resolvedBy: text("resolved_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		// One waiting request per organization, enforced by the database.
+		uniqueIndex("upgrade_requests_one_pending")
+			.on(table.organizationId)
+			.where(sql`${table.status} = 'pending'`),
 	],
 );
 

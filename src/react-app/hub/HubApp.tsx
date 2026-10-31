@@ -2,7 +2,6 @@ import { Component, useEffect, type ReactNode } from "react";
 import {
 	QueryClient,
 	QueryClientProvider,
-	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
 import { CircleAlert, Hammer, Lock, SearchX } from "lucide-react";
@@ -28,12 +27,20 @@ import { PolicyEditorPage } from "./pages/PolicyEditor";
 import {
 	SettingsDepartmentsPage,
 	SettingsGeneralPage,
+	SettingsPlanPage,
 	SettingsProfilePage,
 	SettingsSecurityPage,
 } from "./pages/SettingsArea";
+import {
+	SuperOrganizationsPage,
+	SuperOverviewPage,
+	SuperPlansPage,
+	SuperStoragePage,
+	SuperUsersPage,
+} from "./pages/SuperAdmin";
 import { UsersPage } from "./pages/Users";
-import { canManage, Header, WorkspaceShell } from "./Shell";
-import { buttonClass, LOGO, StartupScreen, StatePanel } from "./ui";
+import { canManage, WorkspaceShell } from "./Shell";
+import { buttonClass, StartupScreen, StatePanel } from "./ui";
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -230,6 +237,9 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				<Route path="/settings/security">
 					<SettingsSecurityPage me={me} org={org} />
 				</Route>
+				<Route path="/settings/plan">
+					{manager ? <SettingsPlanPage org={org} /> : <NoAccessPage />}
+				</Route>
 				<Route path="/settings/departments">
 					{manager ? <SettingsDepartmentsPage /> : <NoAccessPage />}
 				</Route>
@@ -252,45 +262,6 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				</Route>
 			</Switch>
 		</WorkspaceShell>
-	);
-}
-
-function SuperAdminPage() {
-	const { t } = useI18n();
-	const stats = useQuery({
-		queryKey: ["superadmin-stats"],
-		queryFn: () =>
-			api<{ organizations: number; users: number }>("/superadmin/stats"),
-	});
-
-	return (
-		<div className="flex h-dvh flex-col">
-			<Header />
-			<main className="mx-auto w-full max-w-5xl flex-1 overflow-auto p-4 md:p-6">
-				<div className="flex items-center gap-2">
-					<img src={LOGO} alt="" width="28" height="28" className="rounded-[5px]" />
-					<h1 className="text-2xl font-semibold tracking-tight">
-						{t("superadmin.title")}
-					</h1>
-				</div>
-				{stats.isError && (
-					<div className="mt-6">
-						<StatePanel icon={CircleAlert} title={t("error.load")} />
-					</div>
-				)}
-				<dl className="mt-6 grid gap-4 sm:grid-cols-2">
-					{[
-						{ label: t("superadmin.organizations"), value: stats.data?.organizations },
-						{ label: t("superadmin.users"), value: stats.data?.users },
-					].map((stat) => (
-						<div key={stat.label} className="rounded-card border border-border bg-card p-5">
-							<dt className="text-sm text-muted-foreground">{stat.label}</dt>
-							<dd className="mt-1 text-3xl font-semibold">{stat.value ?? "–"}</dd>
-						</div>
-					))}
-				</dl>
-			</main>
-		</div>
 	);
 }
 
@@ -342,8 +313,25 @@ function Gate() {
 	}
 
 	if (location === "/superadmin" || location.startsWith("/superadmin/")) {
-		return me.data.user.isSuperAdmin ? (
-			<SuperAdminPage />
+		const superMe = me.data;
+		return superMe.user.isSuperAdmin ? (
+			<Switch>
+				<Route path="/superadmin/organizations">
+					<SuperOrganizationsPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/users">
+					<SuperUsersPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/plans">
+					<SuperPlansPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/storage">
+					<SuperStoragePage me={superMe} />
+				</Route>
+				<Route>
+					<SuperOverviewPage me={superMe} />
+				</Route>
+			</Switch>
 		) : (
 			<main className="flex min-h-dvh items-center justify-center">
 				<NoAccessPage />
