@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { api, ApiError, type Me } from "../api";
+import { api, ApiError, authClient, type Me } from "../api";
 import {
 	Alert,
 	buttonClass,
@@ -134,7 +134,15 @@ function Layout({
 	children: ReactNode;
 }) {
 	const [location] = useLocation();
+	const queryClient = useQueryClient();
 	const pending = usePendingCount();
+
+	async function signOut() {
+		await authClient.signOut();
+		queryClient.clear();
+		window.location.assign("/sign-in");
+	}
+
 	return (
 		<div className="flex min-h-dvh flex-col bg-background md:flex-row">
 			<aside className="flex shrink-0 flex-col bg-[#101219] px-3 py-4 text-[#F3F4F7] md:sticky md:top-0 md:h-dvh md:w-[248px]">
@@ -178,6 +186,14 @@ function Layout({
 							← Back to my organization
 						</Link>
 					)}
+					<p className="min-w-0 break-all">{me.user.email}</p>
+					<button
+						type="button"
+						onClick={signOut}
+						className="self-start font-medium text-[#F3F4F7] hover:underline"
+					>
+						Sign out
+					</button>
 				</div>
 			</aside>
 			<main className="flex min-w-0 flex-1 flex-col gap-4 p-4 md:px-6 md:py-7">
