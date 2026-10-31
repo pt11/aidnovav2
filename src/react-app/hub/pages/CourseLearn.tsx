@@ -14,7 +14,6 @@ import {
 	Minus,
 	Plus,
 	Printer,
-	X,
 } from "lucide-react";
 import { Link } from "wouter";
 import { api, ApiError } from "../api";
@@ -206,7 +205,7 @@ export function CourseOverviewPage({ id, canManage }: { id: string; canManage: b
 							aria-valuemin={0}
 							aria-valuemax={100}
 							aria-label={t("course.your_progress")}
-							className="h-2 overflow-hidden rounded-full bg-muted"
+							className="h-2 overflow-hidden rounded-full bg-input"
 						>
 							<div className="h-full rounded-full bg-primary" style={{ width: `${data.percent}%` }} />
 						</div>
@@ -678,16 +677,34 @@ export function CourseLessonPage({ id, lessonId }: { id: string; lessonId: strin
 
 	return (
 		<div className="flex h-full min-h-0 flex-col">
-			<header className="flex items-center gap-2 border-b border-border bg-card px-3 py-2 md:px-5">
-				<Link href={`/courses/${id}`} aria-label={t("course.exit_lesson")} className="grid size-10 shrink-0 place-items-center rounded-md text-foreground hover:bg-muted">
-					<X size={18} aria-hidden="true" />
+			<header className="flex flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-2.5 md:px-5">
+				<Link href={`/courses/${id}`} className={buttonClass("outline", "min-h-[34px] gap-1.5 px-3 py-0")}>
+					<ChevronLeft size={16} aria-hidden="true" />
+					{t("course.exit_lesson")}
 				</Link>
-				<div className="min-w-0 flex-1">
-					<p className="truncate text-xs text-muted-foreground">
-						{t("course.lesson_x_of_y", { number: position + 1, total: ordered.length })} · {outline.percent}%
-					</p>
+				<div className="min-w-0 flex-[1_1_220px]">
 					<p className="truncate font-semibold">{outline.title}</p>
+					<p className="flex items-center gap-2 text-xs text-muted-foreground">
+						<span className="whitespace-nowrap">{t("course.lessons_done", { done: ordered.filter((lesson) => lesson.done).length, total: ordered.length })}</span>
+						<span
+							role="progressbar"
+							aria-valuenow={outline.percent}
+							aria-valuemin={0}
+							aria-valuemax={100}
+							aria-label={t("course.your_progress")}
+							className="h-1.5 w-[140px] max-w-[30%] overflow-hidden rounded-full bg-input"
+						>
+							<span className="block h-full rounded-full bg-primary" style={{ width: `${outline.percent}%` }} />
+						</span>
+						{outline.percent}%
+					</p>
 				</div>
+				{!current.preview && (
+					<span className="hidden items-center gap-1.5 text-[13px] text-muted-foreground md:inline-flex">
+						<Check size={14} strokeWidth={2.5} aria-hidden="true" className="text-[#22A076]" />
+						{t("course.progress_saved")}
+					</span>
+				)}
 				<button
 					type="button"
 					aria-label={t("course.open_outline")}
@@ -698,9 +715,6 @@ export function CourseLessonPage({ id, lessonId }: { id: string; lessonId: strin
 					<Menu size={18} aria-hidden="true" />
 				</button>
 			</header>
-			<div className="h-[3px] bg-muted">
-				<div className="h-full bg-primary" style={{ width: `${outline.percent}%` }} />
-			</div>
 			{current.preview && <PreviewBanner draft={outline.status === "draft"} />}
 			<div className="flex min-h-0 flex-1">
 				<aside className={`${outlineOpen ? "absolute inset-x-0 z-20 max-h-[70vh] shadow-lg" : "hidden"} overflow-auto border-r border-border bg-card p-3 lg:static lg:block lg:max-h-none lg:w-[280px] lg:shrink-0 lg:shadow-none`}>

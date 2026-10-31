@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { Children, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
 	Building2,
@@ -88,7 +88,7 @@ function ProgressBar({
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-label={label}
-			className="h-1.5 overflow-hidden rounded-full bg-muted"
+			className="h-1.5 overflow-hidden rounded-full bg-input"
 		>
 			<div
 				className={`h-full rounded-full ${low ? "bg-destructive" : violet ? "bg-[#753FF3]" : "bg-primary"}`}
@@ -269,6 +269,28 @@ function relativeTime(value: string, now: number, language: string) {
 	return format.format(Math.round(hours / 24), "day");
 }
 
+const ATTENTION_SHOWN = 5;
+
+function AttentionList({ children }: { children: ReactNode }) {
+	const { t } = useI18n();
+	const [showAll, setShowAll] = useState(false);
+	const items = Children.toArray(children);
+	return (
+		<>
+			<ul>{showAll ? items : items.slice(0, ATTENTION_SHOWN)}</ul>
+			{items.length > ATTENTION_SHOWN && !showAll && (
+				<button
+					type="button"
+					className="w-full border-t border-border px-5 py-3 text-left text-[13px] font-semibold text-selected-foreground hover:bg-muted"
+					onClick={() => setShowAll(true)}
+				>
+					{t("dashboard.show_all", { count: items.length })}
+				</button>
+			)}
+		</>
+	);
+}
+
 export function DashboardPage({ me }: { me: Me }) {
 	const { t, language } = useI18n();
 	const [, navigate] = useLocation();
@@ -319,6 +341,8 @@ export function DashboardPage({ me }: { me: Me }) {
 			manager.courses.draftCourses.length +
 			manager.reviewDue.length
 		: 0;
+
+	const hasToDo = data.pendingPolicies.length + data.pendingCourses.length > 0;
 
 	return (
 		<div className="mx-auto flex max-w-[1180px] flex-col gap-5 p-4 md:px-6 md:py-7">
@@ -415,8 +439,9 @@ export function DashboardPage({ me }: { me: Me }) {
 			)}
 
 			<div className="flex flex-wrap items-start gap-4">
+				{(hasToDo || (manager && needsAttention)) && (
 				<div className="flex min-w-0 flex-[2_1_520px] flex-col gap-4">
-					{data.pendingPolicies.length + data.pendingCourses.length > 0 && (
+					{hasToDo && (
 						<ToDoCard policies={data.pendingPolicies} courses={data.pendingCourses} />
 					)}
 					{manager && needsAttention && (
@@ -425,8 +450,8 @@ export function DashboardPage({ me }: { me: Me }) {
 								<h2 className="text-base font-semibold">{t("dashboard.attention")}</h2>
 								<Chip tone="neutral">{t("dashboard.items", { count: attentionCount })}</Chip>
 							</div>
-							<ul>
-								{manager.compliance.behind.map((policy, index) => (
+							<AttentionList>
+{manager.compliance.behind.map((policy, index) => (
 									<AttentionRow
 										key={`behind-${policy.id}`}
 										icon={CircleAlert}
@@ -441,8 +466,7 @@ export function DashboardPage({ me }: { me: Me }) {
 										href={`/policies/${policy.id}`}
 									/>
 								))}
-								{manager.membersWithoutDepartment > 0 && data.departments > 0 && (
-									<AttentionRow
+								{manager.membersWithoutDepartment > 0 && data.departments > 0 && (<AttentionRow key="no-department"
 										icon={UserPlus}
 										title={t(manager.membersWithoutDepartment === 1 ? "dashboard.attention_no_department_one" : "dashboard.attention_no_department", {
 											count: manager.membersWithoutDepartment,
@@ -452,8 +476,7 @@ export function DashboardPage({ me }: { me: Me }) {
 										href="/users"
 									/>
 								)}
-								{noDepartmentsYet && (
-									<AttentionRow
+								{noDepartmentsYet && (<AttentionRow key="departments"
 										icon={Building2}
 										title={t("dashboard.step_departments")}
 										detail={t("dashboard.step_departments_detail")}
@@ -461,8 +484,7 @@ export function DashboardPage({ me }: { me: Me }) {
 										href="/settings"
 									/>
 								)}
-								{noPeopleYet && (
-									<AttentionRow
+								{noPeopleYet && (<AttentionRow key="invite"
 										icon={Mail}
 										title={t("dashboard.step_invite")}
 										detail={t("dashboard.step_invite_detail")}
@@ -505,12 +527,57 @@ export function DashboardPage({ me }: { me: Me }) {
 										href={`/policies/${policy.id}`}
 									/>
 								))}
-							</ul>
+								</AttentionList>
 						</section>
 					)}
 				</div>
+				)}
+				<div className="flex min-w-0 flex-[1_1_300px] flex-col gap-4">
+				<div className="min-w-0">
+					<SectionCard
+						title={t("dashboard.upcoming")}
+						linkLabel={t("nav.calendar")}
+						href="/calendar"
+					>
+						{data.upcoming.length === 0 ? (
+							<p className="text-muted-foreground">{t("dashboard.upcoming_empty")}</p>
+						) : (
+							<ul className="flex flex-col gap-3">
+								{data.upcoming.map((event) => {
+									const timeZone = event.allDay ? "UTC" : undefined;
+									const starts = new Date(event.startsAt);
+									return (
+										<li key={event.id} className="flex items-center gap-3">
+											<span className="flex w-11 shrink-0 flex-col items-center rounded-md border border-border py-1 leading-tight">
+												<span className="text-[10px] font-semibold uppercase text-danger-foreground">
+													{starts.toLocaleDateString(language, { month: "short", timeZone })}
+												</span>
+												<span className="text-base font-semibold">
+													{starts.toLocaleDateString(language, { day: "numeric", timeZone })}
+												</span>
+											</span>
+											<span className="min-w-0">
+												<span className="block break-words font-medium">{event.title}</span>
+												<span className="block break-words text-[13px] text-muted-foreground">
+													{[
+														event.allDay
+															? t("calendar.all_day")
+															: starts.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", hour12: false }),
+														event.location,
+													]
+														.filter(Boolean)
+														.join(" · ")}
+												</span>
+											</span>
+										</li>
+									);
+								})}
+							</ul>
+						)}
+					</SectionCard>
+				</div>
 				{manager && manager.compliance.departments.length > 0 && (
-					<div className="min-w-0 flex-[1_1_300px]">
+					<div className="min-w-0">
 						<SectionCard title={t("dashboard.compliance_by_department")}>
 								<ul className="flex flex-col gap-2.5 text-[13px]">
 									{manager.compliance.departments.map((department) => (
@@ -532,6 +599,7 @@ export function DashboardPage({ me }: { me: Me }) {
 							</SectionCard>
 					</div>
 				)}
+				</div>
 			</div>
 			<div className="flex flex-wrap items-start gap-4">
 				{manager && (
@@ -560,49 +628,6 @@ export function DashboardPage({ me }: { me: Me }) {
 						</SectionCard>
 					</div>
 				)}
-				<div className="min-w-0 flex-[1_1_380px]">
-					<SectionCard
-						title={t("dashboard.upcoming")}
-						linkLabel={t("nav.calendar")}
-						href="/calendar"
-					>
-						{data.upcoming.length === 0 ? (
-							<p className="text-muted-foreground">{t("dashboard.upcoming_empty")}</p>
-						) : (
-							<ul className="flex flex-col gap-3">
-								{data.upcoming.map((event) => {
-									const timeZone = event.allDay ? "UTC" : undefined;
-									const starts = new Date(event.startsAt);
-									return (
-										<li key={event.id} className="flex items-center gap-3">
-											<span className="flex w-11 shrink-0 flex-col items-center rounded-md bg-muted py-1 leading-tight">
-												<span className="text-[10px] font-semibold uppercase text-muted-foreground">
-													{starts.toLocaleDateString(language, { month: "short", timeZone })}
-												</span>
-												<span className="text-base font-semibold">
-													{starts.toLocaleDateString(language, { day: "numeric", timeZone })}
-												</span>
-											</span>
-											<span className="min-w-0">
-												<span className="block break-words font-medium">{event.title}</span>
-												<span className="block break-words text-[13px] text-muted-foreground">
-													{[
-														event.allDay
-															? t("calendar.all_day")
-															: starts.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", hour12: false }),
-														event.location,
-													]
-														.filter(Boolean)
-														.join(" · ")}
-												</span>
-											</span>
-										</li>
-									);
-								})}
-							</ul>
-						)}
-					</SectionCard>
-				</div>
 				<div className="min-w-0 flex-[1_1_380px]">
 					<SectionCard
 						title={t("dashboard.recent")}

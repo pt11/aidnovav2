@@ -498,7 +498,7 @@ function UsageBar({ percent, label }: { percent: number; label: string }) {
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-label={label}
-			className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted"
+			className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-input"
 		>
 			<div
 				className={`h-full rounded-full ${percent >= 90 ? "bg-destructive" : "bg-primary"}`}

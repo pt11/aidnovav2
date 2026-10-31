@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Megaphone } from "lucide-react";
 import { api } from "../api";
@@ -15,8 +15,10 @@ import {
 	PageLoading,
 	Segmented,
 	StatePanel,
-	TextareaField,
 } from "../ui";
+import { RichText } from "../RichText";
+
+const RichEditor = lazy(() => import("../RichEditor"));
 
 import { ActivityDialog } from "./Reports";
 
@@ -104,6 +106,8 @@ function AnnouncementForm({
 	const queryClient = useQueryClient();
 	const [title, setTitle] = useState(existing?.title ?? "");
 	const [content, setContent] = useState(existing?.content ?? "");
+	const [editorKey, setEditorKey] = useState(0);
+	const [contentMissing, setContentMissing] = useState(false);
 	const [priority, setPriority] = useState<Priority>(
 		existing?.priority ?? "normal",
 	);
@@ -121,6 +125,7 @@ function AnnouncementForm({
 			]);
 			setTitle("");
 			setContent("");
+			setEditorKey((current) => current + 1);
 			setPriority("normal");
 			onDone?.();
 		},
@@ -128,6 +133,10 @@ function AnnouncementForm({
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
+		if (!content.trim()) {
+			setContentMissing(true);
+			return;
+		}
 		save.mutate();
 	}
 
@@ -142,15 +151,22 @@ function AnnouncementForm({
 				value={title}
 				onChange={(event) => setTitle(event.target.value)}
 			/>
-			<TextareaField
-				label={t("announcements.content")}
-				required
-				maxLength={10000}
-				rows={6}
-				placeholder={t("announcements.content_placeholder")}
-				value={content}
-				onChange={(event) => setContent(event.target.value)}
-			/>
+			<Suspense fallback={<PageLoading />}>
+				<div className="flex flex-col gap-1.5">
+					<span className="text-sm font-medium">{t("announcements.content")}</span>
+					<RichEditor
+						key={editorKey}
+						label={t("announcements.content")}
+						initial={existing?.content ?? ""}
+						placeholder={t("announcements.content_placeholder")}
+						onChange={(value) => {
+							setContentMissing(false);
+							setContent(value);
+						}}
+					/>
+					{contentMissing && <p className="text-xs text-danger-foreground">{t("announcements.content_required")}</p>}
+				</div>
+			</Suspense>
 			<fieldset className="flex flex-col gap-2">
 				<legend className="pb-1.5 text-sm font-medium">{t("announcements.priority")}</legend>
 				{(["normal", "high", "urgent"] as const).map((option) => (
@@ -307,7 +323,7 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 										)}
 									</div>
 									<h2 className="mt-2 break-words text-[17px] font-semibold">{item.title}</h2>
-									<p className="mt-1 whitespace-pre-wrap break-words">{item.content}</p>
+									<div className="mt-1 break-words"><RichText text={item.content} /></div>
 									<div className="mt-3 flex flex-wrap items-center gap-3">
 										{item.responded ? (
 											<span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#14795A] dark:text-[#4CC9A0]">

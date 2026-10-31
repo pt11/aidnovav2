@@ -128,6 +128,7 @@ export function UserProfilePage({ id, me, role }: { id: string; me: Me; role: Ro
 	const { t, language } = useI18n();
 	const queryClient = useQueryClient();
 	const [tab, setTab] = useState<(typeof TABS)[number]>("learning");
+	const [copied, setCopied] = useState(false);
 	const [dialog, setDialog] = useState<"details" | "role" | "department" | "course" | "reset" | "status" | null>(null);
 	const profile = useQuery({
 		queryKey: profileKey(id),
@@ -246,6 +247,16 @@ export function UserProfilePage({ id, me, role }: { id: string; me: Me; role: Ro
 							{t("profile.facebook_short")}
 						</a>
 					)}
+					<button
+						type="button"
+						className={buttonClass("outline", "mt-1 self-start")}
+						onClick={() => {
+							void navigator.clipboard.writeText(window.location.href).then(() => setCopied(true));
+						}}
+					>
+						{t(copied ? "people.card_copied" : "people.copy_card")}
+					</button>
+					<p className="text-xs text-muted-foreground">{t("people.card_note")}</p>
 				</div>
 				<div className="flex flex-wrap items-center gap-2 lg:ml-auto">
 					{canEditDetails && (
@@ -318,6 +329,7 @@ export function UserProfilePage({ id, me, role }: { id: string; me: Me; role: Ro
 					options={TABS.map((value) => ({ value, label: t(`people.tab_${value}`) }))}
 					value={tab}
 					onChange={setTab}
+					look="underline"
 				/>
 			</div>
 
@@ -363,7 +375,7 @@ export function UserProfilePage({ id, me, role }: { id: string; me: Me; role: Ro
 																aria-valuemin={0}
 																aria-valuemax={100}
 																aria-label={course.title}
-																className="h-1.5 w-28 overflow-hidden rounded-full bg-muted"
+																className="h-1.5 w-28 overflow-hidden rounded-full bg-input"
 															>
 																<span className="block h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
 															</span>

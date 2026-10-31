@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { Check, CircleAlert, MoreHorizontal, Search, type LucideIcon } from "lucide-react";
+import { Check, CircleAlert, Download, MoreHorizontal, Search, X, type LucideIcon } from "lucide-react";
 import { useLocation } from "wouter";
 import { useI18n } from "./i18n";
 
@@ -209,23 +209,40 @@ export function Segmented<T extends string>({
 	options,
 	value,
 	onChange,
+	look = "segmented",
 }: {
 	label: string;
 	options: readonly { value: T; label: string }[];
 	value: T;
 	onChange: (value: T) => void;
+	look?: "segmented" | "underline" | "pills";
 }) {
+	const group = {
+		segmented: "inline-flex max-w-full flex-wrap rounded-md border border-border bg-muted p-[3px]",
+		underline: "flex max-w-full gap-4 overflow-x-auto border-b border-border",
+		pills: "inline-flex max-w-full flex-wrap justify-center gap-2",
+	}[look];
+	const item = (selected: boolean) =>
+		({
+			segmented: `rounded px-3 py-1.5 text-[13px] font-medium leading-[18px] ${
+				selected ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+			}`,
+			underline: `-mb-px shrink-0 whitespace-nowrap border-b-2 px-0.5 py-2 text-sm font-medium ${
+				selected ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
+			}`,
+			pills: `rounded-full border px-3.5 py-1 text-[13px] font-medium leading-5 ${
+				selected ? "border-foreground bg-foreground text-background" : "border-border bg-card text-foreground hover:bg-muted"
+			}`,
+		})[look];
 	return (
-		<div role="group" aria-label={label} className="inline-flex max-w-full flex-wrap rounded-md border border-border bg-muted p-[3px]">
+		<div role="group" aria-label={label} className={group}>
 			{options.map((option) => (
 				<button
 					key={option.value}
 					type="button"
 					aria-pressed={value === option.value}
 					onClick={() => onChange(option.value)}
-					className={`rounded px-3 py-1.5 text-[13px] font-medium leading-[18px] ${
-						value === option.value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-					}`}
+					className={item(value === option.value)}
 				>
 					{option.label}
 				</button>
@@ -320,6 +337,70 @@ export function PageError({ onRetry }: { onRetry: () => void }) {
 				</button>
 			}
 		/>
+	);
+}
+
+const PREVIEWABLE = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+export function canPreviewFile(mimeType: string | null | undefined) {
+	return !!mimeType && PREVIEWABLE.has(mimeType);
+}
+
+// The one way to look at a PDF or image: it stays on the page, in a drawer.
+export function FilePreviewDrawer({
+	name,
+	mimeType,
+	src,
+	downloadHref,
+	onClose,
+}: {
+	name: string;
+	mimeType: string | null;
+	src: string;
+	downloadHref: string;
+	onClose: () => void;
+}) {
+	const { t } = useI18n();
+	const closeButton = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		closeButton.current?.focus();
+	}, []);
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") onClose();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [onClose]);
+	return (
+		<>
+			<button type="button" aria-label={t("common.close")} onClick={onClose} className="fixed inset-0 z-50 bg-black/40" />
+			<aside aria-label={name} className="fixed inset-y-0 right-0 z-50 flex w-[min(820px,100%)] flex-col bg-card shadow-lg">
+				<header className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+					<h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{name}</h2>
+					<a href={downloadHref} className={buttonClass("outline", "min-h-9 px-3 py-0")}>
+						<Download size={15} aria-hidden="true" />
+						{t("files.download")}
+					</a>
+					<button
+						ref={closeButton}
+						type="button"
+						aria-label={t("common.close")}
+						className="grid size-9 shrink-0 place-items-center rounded-md hover:bg-muted"
+						onClick={onClose}
+					>
+						<X size={18} aria-hidden="true" />
+					</button>
+				</header>
+				<div className="min-h-0 flex-1 bg-muted">
+					{mimeType === "application/pdf" ? (
+						<iframe title={name} src={src} className="size-full border-0" />
+					) : (
+						<img src={src} alt={name} className="size-full object-contain p-4" />
+					)}
+				</div>
+			</aside>
+		</>
 	);
 }
 

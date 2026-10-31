@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
 	FileSpreadsheet,
 	FileText,
@@ -14,7 +14,14 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import { Link, useSearch } from "wouter";
-import { api, ApiError, type Membership } from "../api";
+import { api, type Membership } from "../api";
+import {
+	ASSISTANT_ERRORS,
+	sourceLinks,
+	useAssistantChat,
+	type AssistantSources as Sources,
+	type ChatMessage,
+} from "../AskPanel";
 import { useI18n } from "../i18n";
 import { Alert, Chip, PageLoading, Segmented, StatePanel } from "../ui";
 import { CATEGORY_KEYS } from "./Policies";
@@ -48,26 +55,8 @@ interface HubFile {
 	url: string | null;
 }
 
-interface Sources {
-	policies: { id: number; title: string }[];
-	files: { id: number; name: string; folderId: number | null }[];
-	announcements: { id: number; title: string }[];
-}
-
-interface ChatMessage {
-	role: "user" | "assistant";
-	content: string;
-	sources?: Sources;
-}
-
-const MAX_HISTORY = 10;
 const TABS = ["all", "policies", "courses", "files", "links"] as const;
 const SUGGESTION_KEYS = ["hub.suggest_policies", "hub.suggest_leave", "hub.suggest_news"];
-const ERROR_KEYS: Record<string, string> = {
-	ASSISTANT_LIMIT: "hub.assistant_limit",
-	INVALID_MESSAGES: "hub.assistant_too_long",
-};
-
 function fileHref(file: { folderId: number | null }) {
 	return file.folderId ? `/files?folder=${file.folderId}` : "/files";
 }
@@ -125,23 +114,7 @@ function ResultCard({
 }
 
 function SourceLinks({ sources }: { sources: Sources }) {
-	const links = [
-		...sources.policies.map((policy) => ({
-			key: `policy-${policy.id}`,
-			href: `/policies/${policy.id}`,
-			label: policy.title,
-		})),
-		...sources.files.map((file) => ({
-			key: `file-${file.id}`,
-			href: fileHref(file),
-			label: file.name,
-		})),
-		...sources.announcements.map((item) => ({
-			key: `announcement-${item.id}`,
-			href: "/",
-			label: item.title,
-		})),
-	];
+	const links = sourceLinks(sources);
 	if (links.length === 0) return null;
 	return (
 		<ul className="mt-3 flex flex-wrap gap-2">
@@ -166,7 +139,6 @@ export function HubPage({ org }: { org: Membership }) {
 	const initialQuery = new URLSearchParams(search).get("q") ?? "";
 	const [query, setQuery] = useState(initialQuery);
 	const [tab, setTab] = useState<(typeof TABS)[number]>("all");
-	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	// A new search from the header bar replaces what's in this page's box.
 	const [lastInitial, setLastInitial] = useState(initialQuery);
 	if (initialQuery !== lastInitial) {
@@ -188,35 +160,8 @@ export function HubPage({ org }: { org: Membership }) {
 		queryFn: () => api<{ files: HubFile[] }>("/files"),
 		select: (data) => data.files,
 	});
-	const ask = useMutation({
-		mutationFn: (history: ChatMessage[]) =>
-			api<{ answer: string; sources: Sources }>("/assistant", {
-				method: "POST",
-				body: {
-					messages: history
-						.slice(-MAX_HISTORY)
-						.map(({ role, content }) => ({ role, content })),
-				},
-			}),
-		onSuccess: (data) =>
-			setMessages((current) => [
-				...current,
-				{ role: "assistant", content: data.answer, sources: data.sources },
-			]),
-	});
-	const errorCode = ask.error instanceof ApiError ? ask.error.code : "";
-
-	function send(text: string) {
-		const content = text.trim();
-		if (!content || ask.isPending) return;
-		const next = [...messages, { role: "user" as const, content }];
-		// History has to start with a question, even after trimming to the limit.
-		const start = next.length - MAX_HISTORY;
-		const trimmed =
-			start > 0 && next[start].role === "assistant" ? next.slice(start + 1) : next;
-		setMessages(next);
-		ask.mutate(trimmed);
-	}
+	const chat = useAssistantChat();
+	const { messages, send } = chat;
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
@@ -287,6 +232,7 @@ export function HubPage({ org }: { org: Membership }) {
 					options={TABS.map((option) => ({ value: option, label: t(`hub.tab_${option}`) }))}
 					value={tab}
 					onChange={setTab}
+					look="pills"
 				/>
 
 				{exchanges.length === 0 ? (
@@ -324,9 +270,9 @@ export function HubPage({ org }: { org: Membership }) {
 										</p>
 										{exchange.answer.sources && <SourceLinks sources={exchange.answer.sources} />}
 									</>
-								) : ask.isError ? (
+								) : chat.failed ? (
 									<div className="mt-2">
-										<Alert>{t(ERROR_KEYS[errorCode] ?? "hub.assistant_failed")}</Alert>
+										<Alert>{t(ASSISTANT_ERRORS[chat.errorCode] ?? "hub.assistant_failed")}</Alert>
 									</div>
 								) : (
 									<p role="status" className="mt-2 text-muted-foreground">

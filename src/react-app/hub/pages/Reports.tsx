@@ -112,7 +112,7 @@ function Bar({ percent, label }: { percent: number; label: string }) {
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-label={label}
-				className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+				className="h-1.5 flex-1 overflow-hidden rounded-full bg-input"
 			>
 				<span className="block h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
 			</span>
@@ -505,6 +505,7 @@ export function ReportsPage() {
 					options={TABS.map((value) => ({ value, label: t(`reports.tab_${value}`) }))}
 					value={tab}
 					onChange={setTab}
+					look="underline"
 				/>
 			</div>
 

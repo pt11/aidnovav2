@@ -1627,21 +1627,22 @@ export function CourseLearnersPage({ id }: { id: string }) {
 		completed: "course.status_completed",
 	};
 	return (
-		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
-			<div className="flex flex-wrap items-center gap-3">
-				<Link href={`/courses/${id}/manage`} aria-label={t("course.back_to_course")} className="grid size-8 place-items-center rounded-md border border-border text-foreground">
+		<div className="flex min-h-full flex-col">
+			<header className="flex flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-2.5 md:px-6">
+				<Link href={`/courses/${id}/manage`} aria-label={t("course.back_to_course")} className="grid size-8 shrink-0 place-items-center rounded-md border border-border text-foreground">
 					<ChevronLeft size={16} aria-hidden="true" />
 				</Link>
 				<div className="min-w-0 flex-[1_1_260px]">
-					<h1 className="text-[22px] font-semibold">{t("course.learner_progress")}</h1>
-					<p className="break-words text-muted-foreground">{data.title}</p>
+					<p className="break-words text-xs text-muted-foreground">{data.title}</p>
+					<h1 className="text-base font-semibold">{t("course.learner_progress")}</h1>
 				</div>
 				{!data.isMandatory && (
 					<button type="button" className={buttonClass()} onClick={() => setAssigning(true)}>
 						{t("course.assign")}
 					</button>
 				)}
-			</div>
+			</header>
+			<div className="flex flex-col gap-4 p-4 md:p-6">
 			{data.isMandatory && <p className="rounded-md bg-selected px-3 py-2 text-[13px]">{t("course.mandatory_everyone")}</p>}
 			{unassign.isError && <Alert>{t("error.generic")}</Alert>}
 			{data.learners.length === 0 ? (
@@ -1695,6 +1696,7 @@ export function CourseLearnersPage({ id }: { id: string }) {
 				</DataTable>
 			)}
 			{assigning && <AssignDialog courseId={id} data={data} onClose={() => setAssigning(false)} />}
+		</div>
 		</div>
 	);
 }

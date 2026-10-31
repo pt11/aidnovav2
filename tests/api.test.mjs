@@ -12,6 +12,17 @@ const RUN = Date.now();
 const PASSWORD = "correct-horse-battery";
 let ipCounter = 0;
 
+// The dev server closes idle connections while a setup command runs, and reusing
+// one fails before the request reaches the app, so it's safe to send again.
+async function send(url, options) {
+	try {
+		return await fetch(url, options);
+	} catch (error) {
+		if (error.cause?.code !== "ECONNRESET") throw error;
+		return fetch(url, options);
+	}
+}
+
 function sql(command) {
 	execFileSync(
 		"npx",
@@ -37,7 +48,7 @@ class Client {
 				.map(([name, value]) => `${name}=${value}`)
 				.join("; ");
 		}
-		const response = await fetch(`${BASE}${path}`, {
+		const response = await send(`${BASE}${path}`, {
 			method,
 			headers,
 			body: body === undefined ? undefined : JSON.stringify(body),
@@ -59,7 +70,7 @@ class Client {
 			cookie: [...this.cookies].map(([n, v]) => `${n}=${v}`).join("; "),
 		};
 		if (method !== "GET") headers.origin = BASE;
-		const response = await fetch(`${BASE}${path}`, { method, headers, body });
+		const response = await send(`${BASE}${path}`, { method, headers, body });
 		const buffer = Buffer.from(await response.arrayBuffer());
 		let data = null;
 		try {
@@ -2624,5 +2635,969 @@ describe("activity report access", () => {
 		assert.equal((await admin.request(path)).status, 200);
 		// Totals stay available to managers.
 		assert.equal((await manager.request("/api/reports/files")).status, 200);
+	});
+});
+
+describe("capacity building", () => {
+	let platform, admin, lead, backup, staff, colleague, noTeam, outsider, orgId, deptA, deptB;
+	const modules = "/api/organizations/current/modules";
+	const valid = {
+		title: "Project Cycle Management",
+		category: "project_management",
+		format: "hybrid",
+		startDate: "2026-08-18",
+		endDate: "2026-08-22",
+		durationValue: 5,
+		durationUnit: "training_days",
+		trainingStatus: "completed",
+		objectives: "Plan and close projects.",
+		provider: "Local Trainer Co",
+		language: "my",
+		locationMode: "region",
+		region: "Yangon",
+		reflection: "Private thoughts here.",
+		shareReflection: false,
+	};
+	const create = async (client, body = valid) =>
+		(await client.request("/api/capacity/records", { method: "POST", body })).data.id;
+	const read = (client, id) => client.request(`/api/capacity/records/${id}`);
+	const submit = (client, id) => client.request(`/api/capacity/records/${id}/submit`, { method: "POST", body: {} });
+	const decide = (client, id, body) => client.request(`/api/capacity/reviews/${id}/decision`, { method: "POST", body });
+	const evidence = (client, id, name, content = "hello") =>
+		client.fileRequest(`/api/capacity/records/${id}/evidence?${new URLSearchParams({ name })}`, {
+			method: "POST",
+			body: Buffer.from(content),
+		});
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("cbplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("cbadmin");
+		lead = await new Client().signUpAndIn("cblead");
+		backup = await new Client().signUpAndIn("cbbackup");
+		staff = await new Client().signUpAndIn("cbstaff");
+		colleague = await new Client().signUpAndIn("cbcolleague");
+		noTeam = await new Client().signUpAndIn("cbnoteam");
+		outsider = await new Client().signUpAndIn("cbout");
+		orgId = (await admin.createOrg("cb")).data.id;
+		await outsider.createOrg("cbo");
+		deptA = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Programs" } })).data.id;
+		deptB = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Finance" } })).data.id;
+		addMember(lead.userId, orgId, "manager");
+		addMember(backup.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(colleague.userId, orgId, "staff");
+		addMember(noTeam.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${deptA} WHERE organization_id = ${orgId} AND user_id IN ('${lead.userId}', '${staff.userId}')`);
+		sql(`UPDATE user_profiles SET department_id = ${deptB} WHERE organization_id = ${orgId} AND user_id = '${colleague.userId}'`);
+		await platform.request("/api/superadmin/modules/capacity_building", { method: "PATCH", body: { release: "pilot", paused: false } });
+	});
+
+	test("stays closed until the module is on", async () => {
+		assert.equal((await staff.request("/api/capacity/records")).data.code, "MODULE_OFF");
+		await admin.request(`${modules}/capacity_building/review`, { method: "POST", body: { date: "2026-10-02", note: "With local staff" } });
+		assert.equal((await admin.request(`${modules}/capacity_building/enable`, { method: "POST" })).status, 200);
+		assert.equal((await staff.request("/api/capacity/records")).status, 200);
+		assert.equal((await outsider.request("/api/capacity/records")).status, 403);
+	});
+
+	test("only admins choose reviewers, and only from managers and admins", async () => {
+		const set = (client, id, body) => client.request(`/api/capacity/reviewers/${id}`, { method: "PUT", body });
+		assert.equal((await set(lead, deptA, { reviewerId: lead.userId })).status, 403);
+		assert.equal((await set(admin, deptA, { reviewerId: staff.userId })).data.code, "INVALID_REVIEWER");
+		assert.equal((await set(admin, deptA, { reviewerId: lead.userId, backupId: lead.userId })).data.code, "SAME_REVIEWER");
+		assert.equal((await set(admin, 999999, { reviewerId: lead.userId })).status, 404);
+		assert.equal((await set(admin, deptA, { reviewerId: lead.userId, backupId: backup.userId })).status, 200);
+		const { data } = await admin.request("/api/capacity/reviewers");
+		assert.equal(data.teams.find((team) => team.id === deptA).reviewerId, lead.userId);
+		assert.ok(data.candidates.every((person) => person.role !== "staff"));
+	});
+
+	test("a draft saves with little, and submitting needs the details", async () => {
+		const id = await create(staff, { title: "Half done" });
+		const result = await submit(staff, id);
+		assert.equal(result.data.code, "INCOMPLETE");
+		assert.ok(result.data.missing.includes("objectives"));
+		assert.equal((await staff.request("/api/capacity/records", { method: "POST", body: { ...valid, endDate: "2026-01-01" } })).data.code, "END_BEFORE_START");
+		assert.equal((await staff.request("/api/capacity/records", { method: "POST", body: { ...valid, title: " " } })).data.code, "INVALID_TITLE");
+		assert.equal((await read(lead, id)).status, 404, "a reviewer can't see drafts");
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "DELETE" })).status, 200);
+	});
+
+	test("a sensitive category never stores a place or a provider", async () => {
+		const id = await create(staff, { ...valid, category: "safeguarding", title: "PSEA refresher" });
+		const { record } = (await read(staff, id)).data;
+		assert.equal(record.isSensitive, true);
+		assert.equal(record.provider, null);
+		assert.equal(record.region, null);
+		assert.equal(record.locationMode, "withheld");
+		await submit(staff, id);
+		const queue = (await lead.request("/api/capacity/reviews")).data;
+		const item = queue.items.find((entry) => entry.id === id);
+		assert.equal(item.title, null, "the name stays out of the list");
+		await lead.request(`/api/capacity/reviews/${id}/open`, { method: "POST" });
+		const audit = (await admin.request("/api/capacity/audit")).data.entries;
+		assert.ok(audit.some((entry) => entry.action === "capacity.sensitive_opened"));
+		assert.ok(!JSON.stringify(audit).includes("PSEA"), "names never reach the log");
+		await decide(lead, id, { decision: "reject", comment: "Duplicate", version: 1 });
+	});
+
+	test("only the owner and their reviewer can open a record", async () => {
+		const id = await create(staff);
+		await submit(staff, id);
+		assert.equal((await read(staff, id)).data.viewer, "owner");
+		assert.equal((await read(lead, id)).data.viewer, "reviewer");
+		for (const client of [admin, backup, colleague, noTeam, outsider, platform]) {
+			assert.notEqual((await read(client, id)).status, 200);
+		}
+		assert.equal((await staff.request("/api/capacity/reviews")).status, 403);
+		assert.equal((await admin.request("/api/capacity/reviews")).data.items.some((item) => item.id === id), false);
+		assert.equal((await read(lead, id)).data.record.reflection, null, "reflection stays private unless shared");
+		assert.equal((await read(staff, id)).data.record.reflection, valid.reflection);
+		assert.equal((await staff.request(`/api/capacity/reviews/${id}/decision`, { method: "POST", body: { decision: "verify", version: 1 } })).status, 404);
+		assert.equal((await colleague.request(`/api/capacity/records/${id}/messages`, { method: "POST", body: { message: "hi" } })).status, 404);
+		assert.equal((await admin.request(`/api/capacity/records/${id}`, { method: "DELETE" })).status, 404);
+	});
+
+	test("the review flow keeps private notes from the owner", async () => {
+		const id = await create(staff);
+		await submit(staff, id);
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "PUT", body: valid })).data.code, "LOCKED");
+		await lead.request(`/api/capacity/reviews/${id}/open`, { method: "POST" });
+		assert.equal((await read(staff, id)).data.record.reviewStatus, "under_review");
+		assert.equal((await decide(lead, id, { decision: "changes", version: 1 })).data.code, "COMMENT_REQUIRED");
+		assert.equal((await decide(lead, id, { decision: "verify", version: 9 })).data.code, "RECORD_CHANGED");
+		assert.equal((await decide(lead, id, { decision: "changes", comment: "Add day 2", privateNote: "Seems unsure", version: 1 })).status, 200);
+		const own = (await read(staff, id)).data;
+		assert.equal(own.record.reviewStatus, "changes_requested");
+		assert.ok(own.events.some((event) => event.message === "Add day 2"));
+		assert.ok(!JSON.stringify(own).includes("Seems unsure"));
+		assert.ok(JSON.stringify((await read(lead, id)).data).includes("Seems unsure"));
+		assert.ok((await lead.request("/api/capacity/reviews")).data.items.some((item) => item.id === id && item.tab === "sent_back"));
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "PUT", body: { ...valid, shareReflection: true } })).status, 200);
+		assert.equal((await submit(staff, id)).data.version, 2);
+		assert.equal((await read(lead, id)).data.record.reflection, valid.reflection);
+		assert.equal((await decide(lead, id, { decision: "verify", version: 2 })).status, 200);
+		assert.equal((await decide(lead, id, { decision: "reject", comment: "No", version: 2 })).data.code, "ALREADY_DECIDED");
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "PUT", body: valid })).data.code, "LOCKED");
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "DELETE" })).data.code, "LOCKED");
+	});
+
+	test("withdrawing hides it again, and a verified application can move on", async () => {
+		const id = await create(staff, { ...valid, trainingStatus: "applied" });
+		await submit(staff, id);
+		assert.equal((await staff.request(`/api/capacity/records/${id}/withdraw`, { method: "POST" })).status, 200);
+		assert.equal((await read(lead, id)).status, 404);
+		await submit(staff, id);
+		await decide(lead, id, { decision: "verify", version: 2 });
+		assert.equal((await staff.request(`/api/capacity/records/${id}`, { method: "PUT", body: valid })).status, 200);
+		const { record } = (await read(staff, id)).data;
+		assert.equal(record.reviewStatus, "draft");
+		assert.equal(record.trainingStatus, "completed");
+	});
+
+	test("nobody reviews their own training", async () => {
+		const own = await create(lead);
+		await submit(lead, own);
+		assert.equal((await read(backup, own)).data.viewer, "reviewer");
+		assert.equal((await lead.request("/api/capacity/reviews")).data.items.some((item) => item.id === own), false);
+		assert.equal((await lead.request(`/api/capacity/reviews/${own}/decision`, { method: "POST", body: { decision: "verify", version: 1 } })).status, 404);
+		const unassigned = await create(noTeam);
+		await submit(noTeam, unassigned);
+		assert.equal((await read(admin, unassigned)).data.viewer, "reviewer", "no team goes to admins");
+		const waiting = await create(colleague);
+		await submit(colleague, waiting);
+		assert.deepEqual((await read(colleague, waiting)).data.reviewers, [], "a team with no reviewer waits");
+		assert.equal((await read(admin, waiting)).status, 404);
+	});
+
+	test("evidence is private, checked, counted and its views are logged", async () => {
+		const id = await create(staff);
+		assert.equal((await evidence(staff, id, "virus.exe")).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await evidence(colleague, id, "a.pdf")).status, 404);
+		const before = (await admin.request("/api/files/usage")).data.usedBytes;
+		const file = (await evidence(staff, id, "certificate.pdf", "fake pdf")).data.id;
+		assert.equal((await admin.request("/api/files/usage")).data.usedBytes, before + 8);
+		const path = `/api/capacity/records/${id}/evidence/${file}`;
+		const own = await staff.fileRequest(path);
+		assert.equal(own.status, 200);
+		assert.equal(own.headers.get("cache-control"), "private, no-store");
+		assert.ok(own.headers.get("content-disposition").startsWith("inline"));
+		assert.equal((await lead.fileRequest(path)).status, 404, "not before it's submitted");
+		await submit(staff, id);
+		assert.equal((await colleague.fileRequest(path)).status, 404);
+		assert.equal((await lead.fileRequest(path)).status, 200);
+		const download = await lead.fileRequest(`${path}?download=1`);
+		assert.ok(download.headers.get("content-disposition").startsWith("attachment"));
+		const kinds = (await read(staff, id)).data.events.map((event) => event.kind);
+		assert.ok(kinds.includes("evidence_viewed") && kinds.includes("evidence_downloaded"), "the owner can see who opened it");
+		assert.equal((await staff.request(`${path}`, { method: "DELETE" })).data.code, "LOCKED");
+		assert.equal((await lead.request(`${path}`, { method: "DELETE" })).status, 404);
+	});
+
+	test("records stay out of search, the assistant and reports", async () => {
+		const name = `Zebra-Secret-${RUN}`;
+		const id = await create(staff, { ...valid, title: name });
+		await submit(staff, id);
+		for (const path of ["/api/hub/search?q=Zebra", "/api/dashboard", "/api/reports/overview", "/api/reports/courses", "/api/reports/departments"]) {
+			const result = await admin.request(path);
+			assert.ok(!JSON.stringify(result.data ?? "").includes(name), path);
+		}
+		const answer = await staff.request("/api/assistant", { method: "POST", body: { messages: [{ role: "user", content: "Zebra-Secret" }] } });
+		assert.ok(!JSON.stringify(answer.data ?? "").includes(name));
+		assert.ok(!JSON.stringify((await platform.request(`/api/superadmin/organizations/${orgId}`)).data ?? "").includes(name));
+	});
+
+	test("the training report follows role, and never reveals sensitive or draft records", async () => {
+		const report = (client, scope) => client.request(`/api/capacity/report?scope=${scope}`);
+		const open = await create(staff, { ...valid, title: "Report visible" });
+		await submit(staff, open);
+		const secret = await create(staff, { ...valid, title: "Report secret PSEA", category: "safeguarding", startDate: "2026-03-03", endDate: "2026-03-04" });
+		await submit(staff, secret);
+		const draft = await create(staff, { ...valid, title: "Report draft" });
+		assert.equal((await report(staff, "team")).status, 403);
+		assert.equal((await report(lead, "organization")).status, 403);
+		assert.equal((await report(lead, "nonsense")).status, 403);
+		assert.equal((await report(outsider, "team")).status, 403);
+		const org = (await report(admin, "organization")).data.rows;
+		const row = org.find((item) => item.id === open);
+		assert.equal(row.title, "Report visible");
+		assert.ok(!("provider" in row) && !("objectives" in row) && !("reflection" in row) && !("region" in row));
+		const hidden = org.find((item) => item.id === secret);
+		assert.equal(hidden.restricted, true);
+		for (const field of ["title", "category", "startDate", "endDate", "durationValue", "evidenceCount"]) assert.equal(hidden[field], null, field);
+		assert.ok(!JSON.stringify(org).includes("PSEA"));
+		assert.ok(!org.some((item) => item.id === draft), "drafts stay private");
+		const reviewer = (await report(lead, "team")).data.rows.find((item) => item.id === secret);
+		assert.equal(reviewer.title, "Report secret PSEA", "the reviewer still sees it");
+		assert.ok((await report(lead, "department")).data.rows.some((item) => item.id === open));
+		assert.ok(!(await report(backup, "department")).data.rows.some((item) => item.id === open), "another department isn't shown");
+		assert.equal((await read(admin, open)).status, 404, "the report doesn't widen who can open a record");
+	});
+
+	test("exporting the report is logged, without any training names", async () => {
+		const open = await create(colleague, { ...valid, title: "Export me" });
+		await submit(colleague, open);
+		assert.equal((await staff.request("/api/capacity/report/exported", { method: "POST", body: { scope: "team", count: 1 } })).status, 403);
+		await admin.request("/api/capacity/report/exported", { method: "POST", body: { scope: "organization", count: 3 } });
+		const audit = JSON.stringify((await admin.request("/api/capacity/audit")).data.entries);
+		assert.ok(audit.includes("capacity.report_exported"));
+		assert.ok(!audit.includes("Export me"));
+	});
+
+	test("turning the module off closes it and keeps the records", async () => {
+		const id = await create(staff);
+		await admin.request(`${modules}/capacity_building/disable`, { method: "POST" });
+		assert.equal((await read(staff, id)).data.code, "MODULE_OFF");
+		await admin.request(`${modules}/capacity_building/enable`, { method: "POST" });
+		assert.equal((await read(staff, id)).status, 200);
+	});
+});
+
+describe("policy attachments", () => {
+	let admin, manager, staff, other, outsider, orgId, deptA, deptB, policyId;
+	const fields = { title: "Attached Policy", category: "General", content: "## Purpose\n\nFor **everyone**.", isMandatory: true, status: "published", departmentIds: [] };
+	const put = (client, id, name, content = "hello") =>
+		client.fileRequest(`/api/policies/${id}/attachment/file?${new URLSearchParams({ name })}`, { method: "PUT", body: Buffer.from(content) });
+	const link = (client, id, body) => client.request(`/api/policies/${id}/attachment/link`, { method: "PUT", body });
+	const read = (client, id) => client.request(`/api/policies/${id}`);
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("patadmin");
+		manager = await new Client().signUpAndIn("patmanager");
+		staff = await new Client().signUpAndIn("patstaff");
+		other = await new Client().signUpAndIn("patother");
+		outsider = await new Client().signUpAndIn("patout");
+		orgId = (await admin.createOrg("pat")).data.id;
+		await outsider.createOrg("pato");
+		deptA = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "A" } })).data.id;
+		deptB = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "B" } })).data.id;
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${deptA} WHERE organization_id = ${orgId} AND user_id = '${staff.userId}'`);
+		sql(`UPDATE user_profiles SET department_id = ${deptB} WHERE organization_id = ${orgId} AND user_id = '${other.userId}'`);
+		policyId = (await admin.request("/api/policies", { method: "POST", body: fields })).data.id;
+	});
+
+	test("only managers attach, and only allowed files and safe links", async () => {
+		assert.equal((await put(staff, policyId, "a.pdf")).status, 403);
+		assert.equal((await put(outsider, policyId, "a.pdf")).status, 404);
+		assert.equal((await put(admin, policyId, "virus.exe")).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await link(admin, policyId, { url: "javascript:alert(1)" })).data.code, "INVALID_LINK");
+		assert.equal((await link(staff, policyId, { url: "https://example.org" })).status, 403);
+	});
+
+	test("a file round-trips, counts toward storage, and replacing frees the old one", async () => {
+		const usage = async () => (await admin.request("/api/files/usage")).data.usedBytes;
+		const start = await usage();
+		assert.equal((await put(manager, policyId, "signed.pdf", "12345678")).status, 200);
+		assert.equal(await usage(), start + 8);
+		const { attachment } = (await read(staff, policyId)).data;
+		assert.equal(attachment.type, "file");
+		assert.equal(attachment.name, "signed.pdf");
+		assert.equal(attachment.sizeBytes, 8);
+		assert.ok(!("storageKey" in attachment) && !("key" in attachment), "the storage key stays private");
+		const opened = await staff.fileRequest(`/api/policies/${policyId}/attachment`);
+		assert.equal(opened.status, 200);
+		assert.equal(opened.buffer.toString(), "12345678");
+		assert.ok(opened.headers.get("content-disposition").startsWith("inline"));
+		assert.equal(opened.headers.get("cache-control"), "private, no-store");
+		assert.ok((await staff.fileRequest(`/api/policies/${policyId}/attachment?download=1`)).headers.get("content-disposition").startsWith("attachment"));
+		assert.equal((await put(manager, policyId, "report.docx", "1234")).status, 200);
+		assert.equal(await usage(), start + 4);
+		assert.ok((await staff.fileRequest(`/api/policies/${policyId}/attachment`)).headers.get("content-disposition").startsWith("attachment"), "office files download");
+	});
+
+	test("a link replaces a file, and removing clears it", async () => {
+		const usage = async () => (await admin.request("/api/files/usage")).data.usedBytes;
+		const before = await usage();
+		assert.equal((await link(manager, policyId, { url: "https://example.org/doc", name: "Handbook" })).status, 200);
+		assert.equal(await usage(), before - 4);
+		const { attachment } = (await read(staff, policyId)).data;
+		assert.deepEqual([attachment.type, attachment.name, attachment.url], ["link", "Handbook", "https://example.org/doc"]);
+		assert.equal((await staff.fileRequest(`/api/policies/${policyId}/attachment`)).status, 404);
+		assert.equal((await staff.request(`/api/policies/${policyId}/attachment`, { method: "DELETE" })).status, 403);
+		assert.equal((await manager.request(`/api/policies/${policyId}/attachment`, { method: "DELETE" })).status, 200);
+		assert.equal((await read(staff, policyId)).data.attachment, null);
+	});
+
+	test("it follows who can read the policy", async () => {
+		const limited = (await admin.request("/api/policies", { method: "POST", body: { ...fields, title: "A only", departmentIds: [deptA] } })).data.id;
+		await put(admin, limited, "secret.pdf", "secret");
+		assert.equal((await staff.fileRequest(`/api/policies/${limited}/attachment`)).status, 200);
+		assert.equal((await other.fileRequest(`/api/policies/${limited}/attachment`)).status, 404);
+		assert.equal((await outsider.fileRequest(`/api/policies/${limited}/attachment`)).status, 404);
+		const draft = (await admin.request("/api/policies", { method: "POST", body: { ...fields, title: "Draft", status: "draft" } })).data.id;
+		await put(admin, draft, "draft.pdf", "draft");
+		assert.equal((await staff.fileRequest(`/api/policies/${draft}/attachment`)).status, 404);
+		assert.equal((await manager.fileRequest(`/api/policies/${draft}/attachment`)).status, 200);
+	});
+
+	test("a changed document needs acknowledging again, and deleting frees storage", async () => {
+		const version = async () => (await read(admin, policyId)).data.version;
+		const start = await version();
+		await admin.request(`/api/policies/${policyId}`, { method: "PATCH", body: fields });
+		assert.equal(await version(), start, "saving with no change keeps the version");
+		await admin.request(`/api/policies/${policyId}`, { method: "PATCH", body: { ...fields, attachmentChanged: true } });
+		assert.equal(await version(), start + 1);
+		const usage = async () => (await admin.request("/api/files/usage")).data.usedBytes;
+		const gone = (await admin.request("/api/policies", { method: "POST", body: { ...fields, title: "Gone" } })).data.id;
+		const before = await usage();
+		await put(admin, gone, "gone.pdf", "123");
+		assert.equal(await usage(), before + 3);
+		await admin.request(`/api/policies/${gone}`, { method: "DELETE" });
+		assert.equal(await usage(), before);
+	});
+});
+
+describe("projects", () => {
+	let platform, admin, manager, staff, lead, outsider, orgId, projectId;
+	const modules = "/api/organizations/current/modules";
+	const valid = { name: "Community Health", code: "CHP-2026", status: "planned", budgetAmount: 120000, beneficiaryTarget: 5000, startDate: "2026-02-01", endDate: "2026-12-31" };
+	const make = (client, body) => client.request("/api/projects", { method: "POST", body });
+	const read = (client, id) => client.request(`/api/projects/${id}`);
+	const list = async (client) => (await client.request("/api/projects")).data.projects;
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("prplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("pradmin");
+		manager = await new Client().signUpAndIn("prmanager");
+		staff = await new Client().signUpAndIn("prstaff");
+		lead = await new Client().signUpAndIn("prlead");
+		outsider = await new Client().signUpAndIn("prout");
+		orgId = (await admin.createOrg("pr")).data.id;
+		await outsider.createOrg("pro");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(lead.userId, orgId, "staff");
+		await platform.request("/api/superadmin/modules/projects", { method: "PATCH", body: { release: "pilot", paused: false } });
+	});
+
+	test("stays closed until the module is on", async () => {
+		assert.equal((await admin.request("/api/projects")).data.code, "MODULE_OFF");
+		assert.equal((await admin.request(`${modules}/projects/enable`, { method: "POST" })).status, 200);
+		assert.equal((await staff.request("/api/projects")).status, 200);
+		assert.equal((await outsider.request("/api/projects")).status, 403);
+	});
+
+	test("creating checks permissions, details and unique codes", async () => {
+		assert.equal((await make(staff, valid)).status, 403);
+		assert.equal((await make(admin, { ...valid, name: " " })).data.code, "INVALID_NAME");
+		assert.equal((await make(admin, { ...valid, code: "x" })).data.code, "INVALID_CODE");
+		assert.equal((await make(admin, { ...valid, endDate: "2020-01-01" })).data.code, "END_BEFORE_START");
+		assert.equal((await make(admin, { ...valid, budgetAmount: -5 })).data.code, "INVALID_NUMBER");
+		assert.equal((await make(admin, { ...valid, ownerId: outsider.userId })).data.code, "INVALID_PERSON");
+		const created = await make(manager, { ...valid, ownerId: manager.userId, managerId: lead.userId, members: [{ userId: staff.userId, role: "viewer" }, { userId: outsider.userId }] });
+		assert.equal(created.status, 201);
+		projectId = created.data.id;
+		assert.equal((await make(admin, { ...valid, code: "chp-2026" })).data.code, "CODE_TAKEN");
+		const check = (await admin.request("/api/projects/code-check?code=CHP-2026")).data;
+		assert.equal(check.available, false);
+		assert.equal(check.suggestion, "CHP-2026-B");
+		assert.equal((await admin.request("/api/projects/code-check?code=NEW-1")).data.available, true);
+		const { members } = (await read(admin, projectId)).data;
+		assert.deepEqual(members.map((member) => [member.userId, member.role]), [[staff.userId, "viewer"]], "outsiders aren't added");
+	});
+
+	test("only the right people can see a project", async () => {
+		for (const client of [admin, manager, lead, staff]) assert.equal((await read(client, projectId)).status, 200);
+		assert.notEqual((await read(outsider, projectId)).status, 200);
+		const closed = (await make(admin, { ...valid, code: "CLOSED-1" })).data.id;
+		assert.equal((await read(staff, closed)).status, 404, "members only by default");
+		assert.ok(!(await list(staff)).some((project) => project.id === closed));
+		assert.ok((await list(admin)).some((project) => project.id === closed));
+		const open = (await make(admin, { ...valid, code: "OPEN-1", visibility: "organization" })).data.id;
+		assert.equal((await read(staff, open)).status, 200);
+		const draft = (await make(manager, { ...valid, code: "DRAFT-1", status: "draft", members: [{ userId: staff.userId }] })).data.id;
+		assert.equal((await read(staff, draft)).status, 404, "a draft stays with its creator");
+		assert.equal((await read(admin, draft)).status, 200);
+		assert.equal((await read(manager, draft)).status, 200);
+	});
+
+	test("only leads and admins can change a project", async () => {
+		const base = `/api/projects/${projectId}`;
+		const body = { ...valid, name: "Renamed" };
+		assert.equal((await staff.request(base, { method: "PATCH", body })).status, 403);
+		assert.equal((await read(staff, projectId)).data.canEdit, false);
+		assert.equal((await read(lead, projectId)).data.canEdit, true, "a staff member can lead a project");
+		assert.equal((await lead.request(base, { method: "PATCH", body: { ...body, status: "in_progress" } })).status, 200);
+		const { project, activity } = (await read(admin, projectId)).data;
+		assert.equal(project.name, "Renamed");
+		assert.equal(project.status, "in_progress");
+		assert.equal(activity[0].kind, "status");
+		assert.equal((await admin.request(base, { method: "PATCH", body: { ...body, code: "CLOSED-1" } })).data.code, "CODE_TAKEN");
+		assert.equal((await staff.request(`${base}/people`)).status, 403);
+		assert.equal((await lead.request(`${base}/people`)).status, 200);
+	});
+
+	test("health is separate from status and needs a reason when it's bad", async () => {
+		const health = (client, body) => client.request(`/api/projects/${projectId}/health`, { method: "POST", body });
+		assert.equal((await health(staff, { health: "healthy" })).status, 403);
+		assert.equal((await health(lead, { health: "at_risk" })).data.code, "REASON_REQUIRED");
+		assert.equal((await health(lead, { health: "nonsense" })).data.code, "INVALID_HEALTH");
+		assert.equal((await health(lead, { health: "at_risk", reason: "Review slipped" })).status, 200);
+		const { project } = (await read(staff, projectId)).data;
+		assert.equal(project.health, "at_risk");
+		assert.equal(project.status, "in_progress");
+		assert.equal(project.healthReason, "Review slipped");
+		assert.ok(project.healthSetByName);
+	});
+
+	test("milestones drive progress, and only leads manage them", async () => {
+		const base = `/api/projects/${projectId}/milestones`;
+		assert.equal((await staff.request(base, { method: "POST", body: { title: "No", dueDate: "2026-03-01" } })).status, 403);
+		assert.equal((await lead.request(base, { method: "POST", body: { title: "", dueDate: "2026-03-01" } })).data.code, "INVALID_MILESTONE");
+		const one = (await lead.request(base, { method: "POST", body: { title: "Baseline", dueDate: "2026-03-01" } })).data.id;
+		const two = (await lead.request(base, { method: "POST", body: { title: "Midterm", dueDate: "2026-06-01" } })).data.id;
+		assert.equal((await lead.request(`${base}/${one}`, { method: "PATCH", body: { completed: true } })).status, 200);
+		const row = (await list(lead)).find((project) => project.id === projectId);
+		assert.deepEqual([row.milestonesDone, row.milestonesTotal], [1, 2]);
+		assert.equal((await staff.request(`${base}/${one}`, { method: "PATCH", body: { completed: false } })).status, 403);
+		assert.equal((await staff.request(`${base}/${two}`, { method: "DELETE" })).status, 403);
+		assert.equal((await lead.request(`${base}/${two}`, { method: "DELETE" })).status, 200);
+		assert.equal((await lead.request(`${base}/999999`, { method: "DELETE" })).status, 404);
+		const other = (await make(admin, { ...valid, code: "OTHER-1" })).data.id;
+		assert.equal((await admin.request(`/api/projects/${other}/milestones/${one}`, { method: "DELETE" })).status, 404, "a milestone belongs to its project");
+	});
+
+	test("the team can be changed, and leaving removes access", async () => {
+		const base = `/api/projects/${projectId}/members`;
+		assert.equal((await staff.request(`${base}/${staff.userId}`, { method: "DELETE" })).status, 403);
+		assert.equal((await lead.request(`${base}/${outsider.userId}`, { method: "PUT", body: {} })).data.code, "INVALID_PERSON");
+		assert.equal((await lead.request(`${base}/${manager.userId}`, { method: "PUT", body: {} })).data.code, "ALREADY_LEAD");
+		assert.equal((await lead.request(`${base}/${staff.userId}`, { method: "PUT", body: { role: "member" } })).status, 200);
+		assert.equal((await read(admin, projectId)).data.members[0].role, "member");
+		assert.ok((await list(staff)).find((project) => project.id === projectId).mine);
+		assert.equal((await lead.request(`${base}/${staff.userId}`, { method: "DELETE" })).status, 200);
+		assert.equal((await read(staff, projectId)).status, 404);
+	});
+
+	test("turning the module off closes it and keeps the projects", async () => {
+		await admin.request(`${modules}/projects/disable`, { method: "POST" });
+		assert.equal((await read(admin, projectId)).data.code, "MODULE_OFF");
+		await admin.request(`${modules}/projects/enable`, { method: "POST" });
+		assert.equal((await read(admin, projectId)).status, 200);
+	});
+});
+
+describe("project files and reports", () => {
+	let platform, admin, lead, member, viewer, other, outsider, orgId, projectId, fileId;
+	const modules = "/api/organizations/current/modules";
+	const base = () => `/api/projects/${projectId}`;
+	const upload = (client, name, content = "hello", query = "") =>
+		client.fileRequest(`${base()}/files?${new URLSearchParams({ name })}${query}`, { method: "POST", body: Buffer.from(content) });
+	const version = (client, name, note, content = "second") =>
+		client.fileRequest(`${base()}/files/${fileId}/versions?${new URLSearchParams({ name, note })}`, { method: "POST", body: Buffer.from(content) });
+	const files = async (client) => (await client.request(`${base()}/files`)).data;
+	const usage = async () => (await admin.request("/api/files/usage")).data.usedBytes;
+	const reports = async (client) => (await client.request(`${base()}/reports`)).data;
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("pfplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("pfadmin");
+		lead = await new Client().signUpAndIn("pflead");
+		member = await new Client().signUpAndIn("pfmember");
+		viewer = await new Client().signUpAndIn("pfviewer");
+		other = await new Client().signUpAndIn("pfother");
+		outsider = await new Client().signUpAndIn("pfout");
+		orgId = (await admin.createOrg("pf")).data.id;
+		await outsider.createOrg("pfo");
+		for (const client of [member, viewer, other]) addMember(client.userId, orgId, "staff");
+		addMember(lead.userId, orgId, "manager");
+		await platform.request("/api/superadmin/modules/projects", { method: "PATCH", body: { release: "pilot", paused: false } });
+		await admin.request(`${modules}/projects/enable`, { method: "POST" });
+		projectId = (await lead.request("/api/projects", {
+			method: "POST",
+			body: {
+				name: "Water",
+				code: `WAT-${RUN % 100000}`,
+				status: "in_progress",
+				folderTemplate: "standard",
+				startDate: "2026-01-15",
+				reportingFrequency: "monthly",
+				budgetAmount: 1000,
+				beneficiaryTarget: 100,
+				members: [{ userId: member.userId, role: "member" }, { userId: viewer.userId, role: "viewer" }],
+			},
+		})).data.id;
+	});
+
+	test("the standard folders are created, and folders can be added and removed", async () => {
+		const { folders, canContribute } = await files(lead);
+		assert.equal(folders.length, 6);
+		assert.equal(canContribute, true);
+		assert.equal((await viewer.request(`${base()}/folders`, { method: "POST", body: { name: "No" } })).status, 403);
+		assert.equal((await member.request(`${base()}/folders`, { method: "POST", body: { name: "Receipts", parentId: folders[0].id } })).status, 201);
+		const added = (await files(lead)).folders.find((folder) => folder.name === "Receipts");
+		assert.equal(added.parentId, folders[0].id);
+		assert.equal((await lead.request(`${base()}/folders/${folders[0].id}`, { method: "DELETE" })).data.code, "FOLDER_NOT_EMPTY");
+		assert.equal((await member.request(`${base()}/folders/${added.id}`, { method: "DELETE" })).status, 403);
+		assert.equal((await lead.request(`${base()}/folders/${added.id}`, { method: "DELETE" })).status, 200);
+	});
+
+	test("only the team can upload, and only allowed files", async () => {
+		assert.equal((await upload(viewer, "a.pdf")).status, 403);
+		assert.equal((await upload(other, "a.pdf")).status, 404);
+		assert.equal((await upload(outsider, "a.pdf")).status, 403);
+		assert.equal((await upload(member, "setup.exe")).data.code, "TYPE_NOT_ALLOWED");
+		const folder = (await files(lead)).folders[1].id;
+		assert.equal((await upload(member, "a.pdf", "x", "&folderId=999999")).data.code, "INVALID_FOLDER");
+		const before = await usage();
+		const created = await upload(member, "Budget.pdf", "12345", `&folderId=${folder}`);
+		assert.equal(created.status, 201);
+		fileId = created.data.id;
+		assert.equal(await usage(), before + 5);
+		const { files: list } = await files(viewer);
+		assert.deepEqual([list[0].name, list[0].currentVersion, list[0].folderId], ["Budget.pdf", 1, folder]);
+		assert.ok(!JSON.stringify(list).includes("storageKey"));
+		const opened = await viewer.fileRequest(`${base()}/files/${fileId}/download?inline=1`);
+		assert.equal(opened.buffer.toString(), "12345");
+		assert.ok(opened.headers.get("content-disposition").startsWith("inline"));
+		assert.notEqual((await other.fileRequest(`${base()}/files/${fileId}/download`)).status, 200);
+	});
+
+	test("versions are kept, need a note, and restoring overwrites nothing", async () => {
+		assert.equal((await version(viewer, "Budget.pdf", "x")).status, 403);
+		assert.equal((await version(member, "Budget.pdf", "")).data.code, "NOTE_REQUIRED");
+		const before = await usage();
+		assert.equal((await version(member, "Budget2.pdf", "Added September", "1234567")).data.version, 2);
+		assert.equal(await usage(), before + 7);
+		assert.equal((await lead.request(`${base()}/files/${fileId}/restore`, { method: "POST", body: { version: 1 } })).data.version, 3);
+		assert.equal(await usage(), before + 7, "a restored version isn't counted twice");
+		const file = (await files(member)).files.find((item) => item.id === fileId);
+		assert.equal(file.currentVersion, 3);
+		assert.equal(file.name, "Budget.pdf");
+		assert.deepEqual(file.versions.map((item) => item.version), [3, 2, 1]);
+		assert.equal((await member.fileRequest(`${base()}/files/${fileId}/download`)).buffer.toString(), "12345");
+		assert.equal((await member.fileRequest(`${base()}/files/${fileId}/download?version=2`)).buffer.toString(), "1234567");
+		assert.equal((await lead.request(`${base()}/files/${fileId}/restore`, { method: "POST", body: { version: 99 } })).status, 404);
+	});
+
+	test("files from the library link only when open to everyone, and hide if that changes", async () => {
+		const open = (await admin.fileRequest(`/api/files/upload?name=open.pdf`, { method: "POST", body: Buffer.from("open") })).data.id;
+		const dept = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Finance" } })).data.id;
+		const closed = (await admin.fileRequest(`/api/files/upload?name=closed.pdf`, { method: "POST", body: Buffer.from("closed") })).data.id;
+		await admin.request(`/api/files/${closed}`, { method: "PATCH", body: { name: "closed.pdf", folderId: null, departmentIds: [dept] } });
+		const link = (client, orgFileId) => client.request(`${base()}/files/link`, { method: "POST", body: { orgFileId } });
+		assert.equal((await link(member, closed)).data.code, "CANT_LINK");
+		assert.equal((await link(viewer, open)).status, 403);
+		const before = await usage();
+		assert.equal((await link(member, open)).status, 201);
+		assert.equal(await usage(), before, "linking doesn't use storage");
+		assert.equal((await link(member, open)).data.code, "ALREADY_LINKED");
+		assert.equal((await files(member)).files.find((file) => file.orgFileId === open).name, "open.pdf");
+		await admin.request(`/api/files/${open}`, { method: "PATCH", body: { name: "open.pdf", folderId: null, departmentIds: [dept] } });
+		const hidden = (await files(member)).files.find((file) => file.orgFileId === open);
+		assert.equal(hidden.name, null);
+		assert.equal(hidden.unavailable, true);
+	});
+
+	test("a report goes through review, and the writer can't approve it", async () => {
+		const made = await member.request(`${base()}/reports`, { method: "POST", body: { type: "form", period: "2026-01", beneficiaries: 40, budgetSpent: 300, fileIds: [fileId, 999999] } });
+		assert.equal(made.status, 201);
+		const id = made.data.id;
+		const path = `${base()}/reports/${id}`;
+		assert.equal((await member.request(`${base()}/reports`, { method: "POST", body: { type: "form", period: "2026-01" } })).data.code, "PERIOD_EXISTS");
+		assert.equal((await member.request(`${base()}/reports`, { method: "POST", body: { type: "form", period: "nope" } })).data.code, "INVALID_PERIOD");
+		assert.equal((await viewer.request(`${base()}/reports`, { method: "POST", body: { type: "form", period: "2026-02" } })).status, 403);
+		assert.equal((await member.request(`${path}/submit`, { method: "POST" })).data.code, "INCOMPLETE");
+		assert.equal((await member.request(path, { method: "PATCH", body: { activities: "Clinics held", beneficiaries: 40, budgetSpent: 300, fileIds: [fileId] } })).status, 200);
+		assert.equal((await reports(viewer)).reports.find((item) => item.id === id).files[0].fileId, fileId);
+		assert.equal((await member.request(`${path}/submit`, { method: "POST" })).status, 200);
+		assert.equal((await member.request(path, { method: "PATCH", body: { activities: "Sneaky" } })).data.code, "LOCKED");
+		assert.equal((await member.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).status, 403);
+		assert.equal((await viewer.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).status, 403);
+		assert.equal((await lead.request(`${path}/decision`, { method: "POST", body: { decision: "revise" } })).data.code, "COMMENT_REQUIRED");
+		assert.equal((await lead.request(`${path}/decision`, { method: "POST", body: { decision: "revise", comment: "Check fuel" } })).status, 200);
+		assert.equal((await reports(member)).reports.find((item) => item.id === id).reviewComment, "Check fuel");
+		assert.equal((await member.request(path, { method: "PATCH", body: { activities: "Clinics held, fuel fixed", beneficiaries: 40, budgetSpent: 300, fileIds: [fileId] } })).status, 200);
+		await member.request(`${path}/submit`, { method: "POST" });
+		assert.equal((await lead.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).status, 200);
+		assert.equal((await lead.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).data.code, "ALREADY_DECIDED");
+		assert.equal((await lead.request(`${base()}/files/${fileId}`, { method: "DELETE" })).data.code, "IN_REPORT");
+		assert.equal((await member.request(`${path}/lock`, { method: "POST" })).status, 403);
+		assert.equal((await lead.request(`${path}/revise`, { method: "POST" })).status, 200);
+		const revised = (await reports(lead)).reports.find((item) => item.id === id);
+		assert.deepEqual([revised.status, revised.revision], ["draft", 2]);
+		await lead.request(`${path}/submit`, { method: "POST" });
+		assert.equal((await lead.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).status, 403, "a lead can't approve their own edit if they wrote it");
+		assert.equal((await admin.request(`${path}/decision`, { method: "POST", body: { decision: "approve" } })).status, 200);
+		assert.equal((await lead.request(`${path}/lock`, { method: "POST" })).status, 200);
+		assert.equal((await lead.request(`${path}/revise`, { method: "POST" })).data.code, "LOCKED");
+		assert.equal((await lead.request(path, { method: "DELETE" })).status, 409);
+	});
+
+	test("the schedule shows what's owed, and only a running project owes reports", async () => {
+		const { schedule } = await reports(lead);
+		const january = schedule.find((item) => item.period === "2026-01");
+		assert.ok(january.reportId, "January's report is matched");
+		assert.equal(january.dueDate, "2026-02-10");
+		const february = schedule.find((item) => item.period === "2026-02");
+		assert.equal(february.reportId, null);
+		const list = (await lead.request("/api/projects")).data.projects.find((project) => project.id === projectId);
+		assert.equal(list.reportsRequired, true);
+		assert.equal(list.reportsOverdue, schedule.filter((item) => item.overdue && item.reportId === null).length);
+		const quiet = (await lead.request("/api/projects", { method: "POST", body: { name: "Later", code: `LAT-${RUN % 100000}`, status: "planned", startDate: "2026-01-01", reportingFrequency: "quarterly" } })).data.id;
+		assert.deepEqual((await reports(lead).then(() => lead.request(`/api/projects/${quiet}/reports`))).data.schedule, []);
+	});
+
+	test("an uploaded report file needs a name and a file from this project", async () => {
+		const add = (client, body) => client.request(`${base()}/reports`, { method: "POST", body: { type: "file", ...body } });
+		assert.equal((await add(member, { fileId })).data.code, "INVALID_LABEL");
+		assert.equal((await add(member, { label: "Q3 donor report", fileId: 999999 })).data.code, "FILE_REQUIRED");
+		const made = await add(member, { label: "Q3 donor report", fileId });
+		assert.equal(made.status, 201);
+		assert.equal((await member.request(`${base()}/reports/${made.data.id}/submit`, { method: "POST" })).status, 200, "a file report needs no form");
+	});
+
+	test("deleting a file frees its storage once", async () => {
+		const before = await usage();
+		const id = (await upload(member, "Temp.pdf", "1234")).data.id;
+		await lead.request(`${base()}/files/${id}/restore`, { method: "POST", body: { version: 1 } });
+		assert.equal(await usage(), before + 4);
+		assert.equal((await member.request(`${base()}/files/${id}`, { method: "DELETE" })).status, 403);
+		assert.equal((await lead.request(`${base()}/files/${id}`, { method: "DELETE" })).status, 200);
+		assert.equal(await usage(), before);
+	});
+});
+
+describe("project close-out, portfolio and dashboard", () => {
+	let platform, admin, lead, member, viewer, other, projectId, csvId;
+	const base = () => `/api/projects/${projectId}`;
+	const upload = (client, name, content) =>
+		client.fileRequest(`${base()}/files?${new URLSearchParams({ name })}`, { method: "POST", body: Buffer.from(content) });
+	const CSV = 'Month,Male,Female,Total\nJanuary,120,150,270\nFebruary,145,165,310\nMarch,180,210,390\nApril,"1,200",250,"1,450"\n';
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("pcplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("pcadmin");
+		lead = await new Client().signUpAndIn("pclead");
+		member = await new Client().signUpAndIn("pcmember");
+		viewer = await new Client().signUpAndIn("pcviewer");
+		other = await new Client().signUpAndIn("pcother");
+		const orgId = (await admin.createOrg("pc")).data.id;
+		addMember(lead.userId, orgId, "manager");
+		for (const client of [member, viewer, other]) addMember(client.userId, orgId, "staff");
+		await platform.request("/api/superadmin/modules/projects", { method: "PATCH", body: { release: "pilot", paused: false } });
+		await admin.request("/api/organizations/current/modules/projects/enable", { method: "POST" });
+		projectId = (await lead.request("/api/projects", {
+			method: "POST",
+			body: { name: "Clinics", code: `CLI-${RUN % 100000}`, status: "in_progress", category: "health", budgetAmount: 1000, budgetCurrency: "USD", members: [{ userId: member.userId, role: "member" }, { userId: viewer.userId, role: "viewer" }] },
+		})).data.id;
+	});
+
+	test("a CSV's numbers come from its rows", async () => {
+		csvId = (await upload(member, "Outreach.csv", CSV)).data.id;
+		assert.equal((await member.request(`${base()}/files/${csvId}/table`)).status, 403, "only leads build dashboards");
+		const table = (await lead.request(`${base()}/files/${csvId}/table`)).data;
+		assert.deepEqual(table.columns, ["Month", "Male", "Female", "Total"]);
+		assert.deepEqual(table.numeric, [false, true, true, true]);
+		assert.equal(table.rowCount, 4);
+		assert.equal(table.rows[3][1], "1,200", "quoted cells stay whole");
+		assert.equal(table.checks.badTotals, 0);
+		assert.equal(table.checks.duplicates, 0);
+		const pdf = (await upload(member, "a.pdf", "x")).data.id;
+		assert.equal((await lead.request(`${base()}/files/${pdf}/table`)).data.code, "NOT_CSV");
+		const empty = (await upload(member, "empty.csv", "Only,Header\n")).data.id;
+		assert.equal((await lead.request(`${base()}/files/${empty}/table`)).data.code, "NO_ROWS");
+		const wrong = (await upload(member, "wrong.csv", "M,A,Total\nJan,1,99\nJan,2,3\n")).data.id;
+		assert.equal((await lead.request(`${base()}/files/${wrong}/table`)).data.checks.duplicates, 1);
+	});
+
+	test("published widgets calculate on the server and don't change by themselves", async () => {
+		const publish = (client, body) => client.request(`${base()}/widgets`, { method: "POST", body: { fileId: csvId, labelColumn: 0, valueColumns: [1, 2], kinds: ["kpi_total", "bar", "donut", "line", "kpi_growth"], ...body } });
+		assert.equal((await publish(member)).status, 403);
+		assert.equal((await publish(lead, { valueColumns: [0] })).data.code, "INVALID_WIDGETS", "text can't be added up");
+		assert.equal((await publish(lead, { kinds: [] })).data.code, "INVALID_WIDGETS");
+		assert.equal((await publish(lead)).data.published, 5);
+		const { widgets } = (await viewer.request(`${base()}/widgets`)).data;
+		const kind = (name) => widgets.find((widget) => widget.kind === name).series;
+		assert.equal(kind("kpi_total").value, 2420);
+		assert.deepEqual(kind("bar").points.map((point) => point.value), [270, 310, 390, 1450]);
+		assert.deepEqual(kind("donut").parts, [{ label: "Male", value: 1645 }, { label: "Female", value: 775 }]);
+		assert.equal(kind("kpi_growth").percent, 272);
+		assert.equal(widgets[0].stale, false);
+		assert.ok(widgets[0].checkedByName);
+		await member.fileRequest(`${base()}/files/${csvId}/versions?${new URLSearchParams({ name: "Outreach.csv", note: "May added" })}`, { method: "POST", body: Buffer.from("Month,Male,Female\nMay,1,1\n") });
+		const after = (await viewer.request(`${base()}/widgets`)).data.widgets;
+		assert.equal(after.find((widget) => widget.kind === "kpi_total").series.value, 2420, "numbers stay as checked");
+		assert.equal(after[0].stale, true);
+		assert.equal((await lead.request(`${base()}/widgets`, { method: "POST", body: { fileId: csvId, labelColumn: 0, valueColumns: [1, 2], kinds: ["kpi_total"] } })).data.published, 1);
+		const again = (await viewer.request(`${base()}/widgets`)).data.widgets;
+		assert.equal(again.length, 1, "publishing again replaces what that file showed");
+		assert.equal(again[0].series.value, 2);
+		assert.equal(again[0].stale, false);
+		assert.equal((await viewer.request(`${base()}/widgets/${again[0].id}`, { method: "DELETE" })).status, 403);
+		assert.equal((await lead.request(`${base()}/widgets/${again[0].id}`, { method: "DELETE" })).status, 200);
+	});
+
+	test("open work blocks completing, and only admins reopen", async () => {
+		const complete = (client, body = {}) => client.request(`${base()}/complete`, { method: "POST", body });
+		const milestone = (await lead.request(`${base()}/milestones`, { method: "POST", body: { title: "Final", dueDate: "2026-12-01" } })).data.id;
+		assert.equal((await member.request(`${base()}/completion`)).status, 403);
+		let { checks } = (await lead.request(`${base()}/completion`)).data;
+		assert.equal(checks.find((check) => check.key === "milestones_open").level, "block");
+		assert.equal((await complete(lead)).data.code, "BLOCKED");
+		assert.equal((await complete(member)).status, 403);
+		await lead.request(`${base()}/milestones/${milestone}`, { method: "PATCH", body: { completed: true } });
+		const report = (await member.request(`${base()}/reports`, { method: "POST", body: { type: "form", period: "2026-01", activities: "Done", budgetSpent: 400, beneficiaries: 20 } })).data.id;
+		({ checks } = (await lead.request(`${base()}/completion`)).data);
+		assert.equal(checks.find((check) => check.key === "reports_open").level, "block");
+		await member.request(`${base()}/reports/${report}/submit`, { method: "POST" });
+		await lead.request(`${base()}/reports/${report}/decision`, { method: "POST", body: { decision: "approve" } });
+		({ checks } = (await lead.request(`${base()}/completion`)).data);
+		assert.equal(checks.find((check) => check.key === "no_final_report").level, "warn", "a warning doesn't block");
+		assert.ok(!checks.some((check) => check.level === "block"));
+		const body = (await lead.request(base())).data.project;
+		const patch = (client, status) => client.request(base(), { method: "PATCH", body: { name: body.name, code: body.code, status } });
+		assert.equal((await patch(lead, "completed")).data.code, "USE_COMPLETE", "the checks can't be skipped");
+		assert.equal((await complete(lead, { notes: "All done" })).status, 200);
+		const { project, activity } = (await viewer.request(base())).data;
+		assert.equal(project.status, "completed");
+		assert.ok(project.completedAt && project.completedByName);
+		assert.equal(project.completionNotes, "All done");
+		assert.equal(activity[0].kind, "completed");
+		assert.equal((await complete(lead)).data.code, "WRONG_STATUS");
+		assert.equal((await patch(lead, "in_progress")).data.code, "USE_COMPLETE");
+		assert.equal((await lead.request(`${base()}/reopen`, { method: "POST" })).status, 403);
+		assert.equal((await admin.request(`${base()}/reopen`, { method: "POST" })).status, 200);
+		assert.equal((await lead.request(base())).data.project.status, "in_progress");
+		await complete(lead);
+		assert.equal((await patch(lead, "archived")).status, 200, "a finished project can be archived");
+		await admin.request(`${base()}/reopen`, { method: "POST" });
+	});
+
+	test("the portfolio only counts what each person can see", async () => {
+		await lead.request(base(), { method: "PATCH", body: { name: "Clinics", code: `CLI-${RUN % 100000}`, status: "in_progress", category: "health", budgetAmount: 1000, budgetCurrency: "USD" } });
+		const hidden = (await admin.request("/api/projects", { method: "POST", body: { name: "Secret", code: `SEC-${RUN % 100000}`, status: "in_progress", budgetAmount: 500, budgetCurrency: "MMK" } })).data.id;
+		const draft = (await admin.request("/api/projects", { method: "POST", body: { name: "Draft", code: `DRF-${RUN % 100000}`, status: "draft" } })).data.id;
+		const portfolio = async (client) => (await client.request("/api/projects/portfolio")).data;
+		const forAdmin = await portfolio(admin);
+		assert.ok(forAdmin.projects.some((project) => project.id === hidden));
+		assert.ok(!forAdmin.projects.some((project) => project.id === draft), "drafts aren't in the portfolio");
+		const mine = await portfolio(viewer);
+		assert.ok(!mine.projects.some((project) => project.id === hidden));
+		const row = mine.projects.find((project) => project.id === projectId);
+		assert.deepEqual([row.spent, row.budget, row.currency], [400, 1000, "USD"], "spending comes from approved reports");
+		assert.deepEqual((await portfolio(other)).projects, []);
+	});
+});
+
+describe("skills, team overview and directory", () => {
+	let platform, admin, lead, staff, colleague, third, outsider, orgId, dept, skillId, secretRecord, rowId;
+	const mods = "/api/organizations/current/modules";
+	const my = (client) => client.request("/api/capacity/my-skills").then((result) => result.data);
+	const nominate = (client, body) => client.request("/api/capacity/my-skills", { method: "POST", body });
+	const directory = (client) => client.request("/api/directory").then((result) => result.data);
+	const profile = (client, body) => client.request("/api/directory/me", { method: "PUT", body });
+	const training = async (client, extra) => {
+		const id = (await client.request("/api/capacity/records", { method: "POST", body: { title: "PCM", category: "meal", format: "online", startDate: "2026-01-01", endDate: "2026-01-02", durationValue: 2, durationUnit: "training_days", trainingStatus: "completed", objectives: "x", ...extra } })).data.id;
+		await client.request(`/api/capacity/records/${id}/submit`, { method: "POST", body: {} });
+		return id;
+	};
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("skplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("skadmin");
+		lead = await new Client().signUpAndIn("sklead");
+		staff = await new Client().signUpAndIn("skstaff");
+		colleague = await new Client().signUpAndIn("skcolleague");
+		third = await new Client().signUpAndIn("skthird");
+		outsider = await new Client().signUpAndIn("skout");
+		orgId = (await admin.createOrg("sk")).data.id;
+		await outsider.createOrg("sko");
+		dept = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Programs" } })).data.id;
+		addMember(lead.userId, orgId, "manager");
+		for (const client of [staff, colleague, third]) addMember(client.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${dept}, position = 'Officer' WHERE organization_id = ${orgId} AND user_id IN ('${staff.userId}', '${colleague.userId}', '${third.userId}')`);
+		for (const key of ["capacity_building", "people_directory"]) {
+			await platform.request(`/api/superadmin/modules/${key}`, { method: "PATCH", body: { release: "pilot", paused: false } });
+			await admin.request(`${mods}/${key}/review`, { method: "POST", body: { date: "2026-10-02", note: "Local staff" } });
+			await admin.request(`${mods}/${key}/enable`, { method: "POST" });
+		}
+		await admin.request(`/api/capacity/reviewers/${dept}`, { method: "PUT", body: { reviewerId: lead.userId } });
+	});
+
+	test("only admins manage the catalog, and rubric edits make a new version", async () => {
+		const body = { name: "Survey design", category: "meal", rubric: ["a", "b", "c", "d", "e"], revalidateMonths: 12 };
+		assert.equal((await lead.request("/api/capacity/skills", { method: "POST", body })).status, 403);
+		assert.equal((await admin.request("/api/capacity/skills", { method: "POST", body: { name: " " } })).data.code, "INVALID_SKILL");
+		skillId = (await admin.request("/api/capacity/skills", { method: "POST", body })).data.id;
+		assert.equal((await admin.request(`/api/capacity/skills/${skillId}`, { method: "PUT", body })).data.rubricVersion, 1, "no change, no new version");
+		assert.equal((await admin.request(`/api/capacity/skills/${skillId}`, { method: "PUT", body: { ...body, rubric: ["z", "b", "c", "d", "e"] } })).data.rubricVersion, 2);
+		const first = (await admin.request("/api/capacity/skills/starter", { method: "POST" })).data.added;
+		assert.ok(first > 5);
+		assert.equal((await admin.request("/api/capacity/skills/starter", { method: "POST" })).data.added, 0, "adding it twice doesn't duplicate");
+		assert.equal((await outsider.request("/api/capacity/skills")).status, 403);
+	});
+
+	test("only an assessor sets a level, and it can't be shared before", async () => {
+		assert.equal((await nominate(staff, { skillId, level: 9, evidence: "x" })).data.code, "INVALID_LEVEL");
+		assert.equal((await nominate(staff, { skillId, level: 3, evidence: " " })).data.code, "EVIDENCE_REQUIRED");
+		assert.equal((await nominate(staff, { skillId: 999999, level: 3, evidence: "x" })).data.code, "INVALID_SKILL");
+		assert.equal((await nominate(staff, { skillId, level: 3, evidence: "Session plan" })).status, 201);
+		let row = (await my(staff)).skills[0];
+		rowId = row.id;
+		assert.equal(row.level, null, "nominating sets nothing");
+		assert.equal(row.pendingLevel, 3);
+		assert.equal((await staff.request(`/api/capacity/my-skills/${rowId}/share`, { method: "PUT", body: { shared: true } })).data.code, "NOT_VERIFIED");
+		assert.equal((await staff.request("/api/capacity/assessments")).status, 403);
+		assert.ok(!(await admin.request("/api/capacity/assessments")).data.assessments.some((item) => item.id === rowId), "an admin who isn't their reviewer doesn't get it");
+		assert.equal((await staff.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { level: 5 } })).status, 404, "nobody assesses themselves");
+		assert.equal((await admin.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { level: 5 } })).status, 404);
+		assert.equal((await lead.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { decline: true } })).data.code, "FEEDBACK_REQUIRED");
+		const queue = (await lead.request("/api/capacity/assessments")).data.assessments;
+		assert.equal(queue[0].rubricVersion, 2);
+		assert.equal((await lead.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { level: 3, feedback: "Solid", privateNote: "Quiet in groups" } })).status, 200);
+		assert.equal((await lead.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { level: 3 } })).data.code, "ALREADY_DECIDED");
+		const result = await my(staff);
+		row = result.skills[0];
+		assert.equal(row.level, 3);
+		assert.equal(row.feedback, "Solid");
+		assert.ok(row.revalidateBy);
+		assert.ok(!JSON.stringify(result).includes("Quiet in groups"), "the private note stays with the assessor");
+		assert.ok(result.badges.some((badge) => badge.kind === "competency"), "proficient earns the competency badge");
+		await nominate(staff, { skillId, level: 5, evidence: "Mentoring" });
+		assert.equal((await lead.request(`/api/capacity/assessments/${rowId}`, { method: "POST", body: { decline: true, feedback: "Not yet" } })).status, 200);
+		const declined = (await my(staff)).skills[0];
+		assert.deepEqual([declined.level, declined.pendingLevel, declined.feedback], [3, null, "Not yet"], "a decline keeps the level");
+	});
+
+	test("badges come from real records, and sensitive or unverified ones can't be shared", async () => {
+		const done = await training(staff, { title: "Project Cycle" });
+		secretRecord = await training(staff, { title: "PSEA", category: "safeguarding" });
+		const pending = await training(staff, { title: "First Aid", category: "health" });
+		await lead.request(`/api/capacity/reviews/${done}/decision`, { method: "POST", body: { decision: "verify", version: 1 } });
+		await lead.request(`/api/capacity/reviews/${secretRecord}/decision`, { method: "POST", body: { decision: "verify", version: 1 } });
+		const { badges } = await my(staff);
+		const find = (id) => badges.find((badge) => badge.key === `training:${id}`);
+		assert.equal(find(done).shareable, true);
+		assert.equal(find(secretRecord).shareable, false);
+		assert.equal(find(pending).kind, "attendance");
+		assert.equal(find(pending).shareable, false);
+		const share = (key, shared = true) => staff.request("/api/capacity/my-badges/share", { method: "PUT", body: { key, shared } });
+		assert.equal((await share(`training:${secretRecord}`)).data.code, "NOT_SHAREABLE");
+		assert.equal((await share(`training:${pending}`)).data.code, "NOT_SHAREABLE");
+		assert.equal((await share("training:999999")).status, 404);
+		assert.equal((await colleague.request("/api/capacity/my-badges/share", { method: "PUT", body: { key: `training:${done}`, shared: true } })).status, 404, "only your own");
+		assert.equal((await share(`training:${done}`)).status, 200);
+	});
+
+	test("nobody is listed until they choose, and cards hold only what was shared", async () => {
+		assert.deepEqual((await directory(colleague)).cards, []);
+		assert.equal((await profile(staff, { listed: true, bio: "Ask me about surveys", showTitle: true, picture: "initials" })).status, 200);
+		let [card] = (await directory(colleague)).cards;
+		assert.equal(card.position, "Officer");
+		assert.equal(card.bio, "Ask me about surveys");
+		assert.deepEqual(card.skills, [], "the skill isn't shared yet");
+		assert.deepEqual(card.badges.map((badge) => badge.title), ["Project Cycle"]);
+		await staff.request(`/api/capacity/my-skills/${rowId}/share`, { method: "PUT", body: { shared: true } });
+		[card] = (await directory(colleague)).cards;
+		assert.deepEqual(card.skills.map((skill) => [skill.name, skill.level]), [["Survey design", 3]]);
+		const text = JSON.stringify(card);
+		for (const secret of ["PSEA", "First Aid", "Session plan", "Solid", "Quiet in groups", "email", "userId"]) assert.ok(!text.includes(secret), secret);
+		assert.equal(card.team, null, "teams stay hidden by default");
+		await profile(staff, { listed: true, showTitle: false, showTeam: true });
+		assert.equal((await directory(colleague)).cards[0].position, null);
+		assert.equal((await directory(colleague)).cards[0].team, null, "the organization's rule comes first");
+		assert.equal((await lead.request("/api/directory/settings", { method: "PUT", body: { showTeams: true } })).status, 403);
+		await admin.request("/api/directory/settings", { method: "PUT", body: { showTeams: true, allowPhotos: false } });
+		assert.equal((await directory(colleague)).cards[0].team, "Programs");
+		await admin.request("/api/directory/settings", { method: "PUT", body: { showTeams: false, allowPhotos: false } });
+		await profile(staff, { listed: false });
+		assert.deepEqual((await directory(colleague)).cards, [], "turning it off removes you");
+		assert.equal((await outsider.request("/api/directory")).status, 403);
+	});
+
+	test("a display name needs approval, and changing it asks again", async () => {
+		const pending = await profile(staff, { listed: true, displayName: "River" });
+		assert.equal(pending.data.displayNamePending, true);
+		assert.deepEqual((await directory(colleague)).cards, [], "not listed at all while it waits, not even under the real name");
+		const { data } = await admin.request("/api/directory/settings");
+		assert.equal(data.pending[0].displayName, "River");
+		assert.equal((await lead.request(`/api/directory/display-names/${data.pending[0].id}`, { method: "POST", body: { approve: true } })).status, 403);
+		await admin.request(`/api/directory/display-names/${data.pending[0].id}`, { method: "POST", body: { approve: true } });
+		const card = (await directory(colleague)).cards[0];
+		assert.equal(card.name, "River");
+		assert.equal(card.isDisplayName, true);
+		assert.ok(!JSON.stringify(card).includes("skstaff"), "the real name isn't on the card");
+		assert.equal((await profile(staff, { listed: true, displayName: "Stream" })).data.displayNamePending, true);
+		assert.deepEqual((await directory(colleague)).cards, []);
+		const again = (await admin.request("/api/directory/settings")).data.pending[0].id;
+		await admin.request(`/api/directory/display-names/${again}`, { method: "POST", body: { approve: true } });
+		await admin.request("/api/directory/settings", { method: "PUT", body: { allowDisplayNames: false } });
+		assert.deepEqual((await directory(colleague)).cards, [], "turning display names off doesn't expose the real name");
+		await admin.request("/api/directory/settings", { method: "PUT", body: { allowDisplayNames: true } });
+		assert.equal((await directory(colleague)).cards[0].name, "Stream");
+		await profile(staff, { listed: true, displayName: "Brook" });
+		const last = (await admin.request("/api/directory/settings")).data.pending[0].id;
+		await admin.request(`/api/directory/display-names/${last}`, { method: "POST", body: { approve: false } });
+		assert.deepEqual((await directory(colleague)).cards, [], "a declined name takes you out, it doesn't reveal you");
+		assert.equal((await staff.request("/api/directory/me")).data.profile.listed, false);
+	});
+
+	test("the team overview follows the reviewer, and hides small groups", async () => {
+		assert.equal((await staff.request("/api/capacity/team-overview")).status, 403);
+		const team = (await lead.request("/api/capacity/team-overview")).data;
+		assert.equal(team.staff, 3);
+		const meal = team.categories.find((group) => group.key === "meal");
+		assert.equal(meal.hidden, true, "one person's training isn't a group");
+		assert.ok(!("verified" in meal));
+		assert.ok(!team.categories.some((group) => group.key === "safeguarding"), "sensitive categories never appear");
+		await training(colleague, { title: "M2" });
+		await training(third, { title: "M3" });
+		const open = (await lead.request("/api/capacity/team-overview")).data.categories.find((group) => group.key === "meal");
+		assert.equal(open.hidden, false);
+		assert.equal(open.reported, 3);
+		const rows = (await lead.request("/api/capacity/team-overview")).data.latest;
+		assert.ok(!JSON.stringify(rows).includes("PSEA"), "a sensitive title stays out of the overview");
+		assert.equal((await lead.request("/api/capacity/team-overview/exported", { method: "POST", body: { count: 3 } })).status, 200);
+		assert.equal((await staff.request("/api/capacity/team-overview/exported", { method: "POST", body: {} })).status, 403);
+		assert.equal((await admin.request("/api/capacity/team-overview")).data.staff, 1, "an admin only sees people they review: here, the lead with no team");
 	});
 });

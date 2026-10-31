@@ -16,6 +16,11 @@ import {
 	SignUpPage,
 } from "./pages/auth";
 import { AnnouncementsPage } from "./pages/Announcements";
+import { MyTrainingPage, ReportTrainingPage, TrainingDetailPage } from "./pages/Capacity";
+import { CapacityReviewsPage, CapacitySettingsPage } from "./pages/CapacityReview";
+import { CapacitySkillsPage, CapacityTeamPage } from "./pages/CapacitySkills";
+import { CapacityTrainingReportPage } from "./pages/CapacityTrainingReport";
+import { DirectoryPage, DirectoryPrivacyPage } from "./pages/Directory";
 import { CreateOrganizationPage } from "./pages/CreateOrganization";
 import { DashboardPage } from "./pages/Dashboard";
 import { FilesPage } from "./pages/Files";
@@ -24,6 +29,9 @@ import { InvitePage } from "./pages/Invite";
 import { PoliciesPage } from "./pages/Policies";
 import { PolicyDetailPage } from "./pages/PolicyDetail";
 import { PolicyEditorPage } from "./pages/PolicyEditor";
+import { ProjectDetailPage } from "./pages/ProjectDetail";
+import { ProjectPortfolioPage } from "./pages/ProjectPortfolio";
+import { ProjectsPage } from "./pages/Projects";
 import {
 	SettingsDepartmentsPage,
 	SettingsGeneralPage,
@@ -208,6 +216,9 @@ function BlockedPage({ me, org }: { me: Me; org: Membership }) {
 function Workspace({ me, org }: { me: Me; org: Membership }) {
 	const manager = canManage(org.role);
 
+	const capacityOn = me.activeModules.includes("capacity_building");
+	const projectsOn = me.activeModules.includes("projects");
+	const directoryOn = me.activeModules.includes("people_directory");
 	return (
 		<WorkspaceShell me={me} org={org}>
 			<Switch>
@@ -276,11 +287,47 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				<Route path="/calendar">
 					<CalendarPage canManage={manager} />
 				</Route>
+				<Route path="/projects/portfolio">
+					{projectsOn ? <ProjectPortfolioPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/projects/:id">
+					{({ id }) => (projectsOn ? <ProjectDetailPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
 				<Route path="/projects">
-					{me.activeModules.includes("projects") ? <LaterPage labelKey="nav.projects" /> : <NoAccessPage />}
+					{projectsOn ? <ProjectsPage me={me.user.id} /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/report">
+					{capacityOn ? <ReportTrainingPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/records/:id/edit">
+					{({ id }) => (capacityOn ? <ReportTrainingPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
+				<Route path="/capacity/records/:id">
+					{({ id }) => (capacityOn ? <TrainingDetailPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
+				<Route path="/capacity/skills">
+					{capacityOn ? <CapacitySkillsPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/team">
+					{capacityOn && manager ? <CapacityTeamPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/directory/privacy">
+					{directoryOn ? <DirectoryPrivacyPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/directory">
+					{directoryOn ? <DirectoryPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/training-report">
+					{capacityOn && manager ? <CapacityTrainingReportPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/reviews">
+					{capacityOn && manager ? <CapacityReviewsPage /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity/settings">
+					{capacityOn && org.role === "admin" ? <CapacitySettingsPage /> : <NoAccessPage />}
 				</Route>
 				<Route path="/capacity">
-					{me.activeModules.includes("capacity_building") ? <LaterPage labelKey="nav.capacity" /> : <NoAccessPage />}
+					{capacityOn ? <MyTrainingPage /> : <NoAccessPage />}
 				</Route>
 				<Route path="/notifications">
 					<LaterPage labelKey="shell.notifications" />

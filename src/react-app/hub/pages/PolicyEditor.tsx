@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from "react";
+import { lazy, Suspense, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronLeft } from "lucide-react";
-import { Link, useLocation } from "wouter";
-import { api, useDepartments } from "../api";
+import { ChevronLeft, FileText, Link2 } from "lucide-react";
+import { Link, useLocation, useSearch } from "wouter";
+import { api, ApiError, useDepartments } from "../api";
 import { useI18n } from "../i18n";
+import { fileSize } from "./Capacity";
 import {
 	Alert,
 	buttonClass,
@@ -11,7 +12,6 @@ import {
 	PageError,
 	PageLoading,
 	SelectField,
-	TextareaField,
 } from "../ui";
 import {
 	CATEGORY_KEYS,
@@ -21,7 +21,154 @@ import {
 	type PolicyStatus,
 } from "./Policies";
 
-function Editor({ existing }: { existing: PolicyDraft | null }) {
+const RichEditor = lazy(() => import("../RichEditor"));
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const ATTACHMENT_ACCEPT = ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.webp";
+const ATTACHMENT_ERRORS: Record<string, string> = {
+	TYPE_NOT_ALLOWED: "files.type_not_allowed",
+	FILE_TOO_LARGE: "files.file_too_large",
+	STORAGE_FULL: "files.storage_full",
+	INVALID_LINK: "form.invalid_link",
+};
+
+type AttachmentDraft =
+	| { type: "file"; name: string; sizeBytes: number | null; file?: File }
+	| { type: "link"; name: string; url: string }
+	| null;
+
+async function saveAttachment(policyId: number, attachment: AttachmentDraft) {
+	if (attachment === null) {
+		await api(`/policies/${policyId}/attachment`, { method: "DELETE" });
+	} else if (attachment.type === "link") {
+		await api(`/policies/${policyId}/attachment/link`, {
+			method: "PUT",
+			body: { name: attachment.name, url: attachment.url },
+		});
+	} else if (attachment.file) {
+		const response = await fetch(`/api/policies/${policyId}/attachment/file?${new URLSearchParams({ name: attachment.file.name })}`, {
+			method: "PUT",
+			body: attachment.file,
+		});
+		if (!response.ok) {
+			const data = (await response.json().catch(() => null)) as { code?: string } | null;
+			throw new ApiError(response.status, data?.code ?? "UNKNOWN", "");
+		}
+	}
+}
+
+function AttachmentSection({
+	value,
+	error,
+	onChange,
+	onError,
+}: {
+	value: AttachmentDraft;
+	error: string;
+	onChange: (value: AttachmentDraft) => void;
+	onError: (key: string) => void;
+}) {
+	const { t } = useI18n();
+	const input = useRef<HTMLInputElement>(null);
+	const [linking, setLinking] = useState(false);
+	const [url, setUrl] = useState("");
+	const [name, setName] = useState("");
+	const pick = () => input.current?.click();
+	function addLink() {
+		if (!/^https?:\/\/\S+$/.test(url.trim())) {
+			onError("form.invalid_link");
+			return;
+		}
+		onError("");
+		onChange({ type: "link", url: url.trim(), name: name.trim() || url.trim() });
+		setLinking(false);
+		setUrl("");
+		setName("");
+	}
+	return (
+		<section className="flex flex-col gap-2.5 rounded-card border border-border bg-card p-5">
+			<h2 className="text-base font-semibold">
+				{t("policies.attachment")}{" "}
+				<span className="text-[13px] font-normal text-muted-foreground">· {t("policies.attachment_optional")}</span>
+			</h2>
+			{error && <Alert>{t(error)}</Alert>}
+			<input
+				ref={input}
+				type="file"
+				accept={ATTACHMENT_ACCEPT}
+				className="sr-only"
+				aria-label={t("policies.attachment_upload")}
+				onChange={(event) => {
+					const file = event.target.files?.[0];
+					event.target.value = "";
+					if (!file) return;
+					if (file.size > MAX_ATTACHMENT_BYTES) {
+						onError("files.file_too_large");
+						return;
+					}
+					onError("");
+					setLinking(false);
+					onChange({ type: "file", name: file.name, sizeBytes: file.size, file });
+				}}
+			/>
+			{value && (
+				<div className="flex flex-wrap items-center gap-3 rounded-[9px] border border-border p-3">
+					<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+						{value.type === "link" ? <Link2 size={17} aria-hidden="true" /> : <FileText size={17} aria-hidden="true" />}
+					</span>
+					<span className="min-w-0 flex-[1_1_200px]">
+						<span className="block break-words font-medium">{value.name}</span>
+						<span className="block break-all text-xs text-muted-foreground">
+							{value.type === "link"
+								? value.url
+								: value.sizeBytes !== null
+									? fileSize(value.sizeBytes)
+									: ""}
+						</span>
+					</span>
+					<button type="button" className={buttonClass("outline", "min-h-8 px-3 py-0")} onClick={value.type === "file" ? pick : () => setLinking(true)}>
+						{t("policies.attachment_replace")}
+					</button>
+					<button
+						type="button"
+						className="min-h-8 px-2.5 text-[13px] font-medium text-danger-foreground"
+						onClick={() => onChange(null)}
+					>
+						{t("policies.attachment_remove")}
+					</button>
+				</div>
+			)}
+			{!value && !linking && (
+				<div className="flex flex-wrap gap-2">
+					<button type="button" className={buttonClass("outline")} onClick={pick}>
+						<FileText size={15} aria-hidden="true" />
+						{t("policies.attachment_upload")}
+					</button>
+					<button type="button" className={buttonClass("outline")} onClick={() => setLinking(true)}>
+						<Link2 size={15} aria-hidden="true" />
+						{t("policies.attachment_link")}
+					</button>
+				</div>
+			)}
+			{linking && (
+				<div className="flex flex-col gap-3 rounded-[9px] border border-border p-3">
+					<Field label={t("policies.attachment_url")} type="url" placeholder="https://" value={url} onChange={(event) => setUrl(event.target.value)} />
+					<Field label={t("policies.attachment_name")} hint={t("cb.optional")} maxLength={300} value={name} onChange={(event) => setName(event.target.value)} />
+					<div className="flex justify-end gap-2">
+						<button type="button" className={buttonClass("ghost")} onClick={() => setLinking(false)}>
+							{t("common.cancel")}
+						</button>
+						<button type="button" className={buttonClass("outline")} onClick={addLink}>
+							{t("policies.attachment_add")}
+						</button>
+					</div>
+				</div>
+			)}
+			<p className="text-xs text-muted-foreground">{t("policies.attachment_hint")}</p>
+		</section>
+	);
+}
+
+function Editor({ existing, attachmentFailed = false }: { existing: PolicyDraft | null; attachmentFailed?: boolean }) {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [, navigate] = useLocation();
@@ -40,17 +187,45 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 		initial.departmentIds.length > 0,
 	);
 	const status: PolicyStatus = existing?.status ?? "draft";
-	const unsaved = JSON.stringify(values) !== JSON.stringify(initial);
+	const [attachment, setAttachment] = useState<AttachmentDraft>(() => {
+		const saved = existing?.attachment;
+		if (!saved) return null;
+		return saved.type === "link"
+			? { type: "link", name: saved.name, url: saved.url ?? "" }
+			: { type: "file", name: saved.name, sizeBytes: saved.sizeBytes };
+	});
+	const [attachmentDirty, setAttachmentDirty] = useState(false);
+	const [attachmentError, setAttachmentError] = useState(attachmentFailed ? "policies.attachment_failed" : "");
+	const [contentMissing, setContentMissing] = useState(false);
+	const unsaved = attachmentDirty || JSON.stringify(values) !== JSON.stringify(initial);
 	const save = useMutation({
-		mutationFn: (nextStatus: PolicyStatus) =>
-			api<{ id: number }>(existing ? `/policies/${existing.id}` : "/policies", {
-				method: existing ? "PATCH" : "POST",
-				body: {
-					...values,
-					departmentIds: someDepartments ? values.departmentIds : [],
-					status: nextStatus,
-				},
-			}),
+		mutationFn: async (nextStatus: PolicyStatus) => {
+			const body = {
+				...values,
+				departmentIds: someDepartments ? values.departmentIds : [],
+				status: nextStatus,
+				attachmentChanged: attachmentDirty,
+			};
+			if (existing) {
+				if (attachmentDirty) await saveAttachment(existing.id, attachment);
+				return api<{ id: number }>(`/policies/${existing.id}`, { method: "PATCH", body });
+			}
+			const created = await api<{ id: number }>("/policies", { method: "POST", body });
+			// The policy is safe by now, so a failed upload is fixed from its edit page.
+			if (attachmentDirty && attachment) {
+				try {
+					await saveAttachment(created.id, attachment);
+				} catch {
+					navigate(`/policies/${created.id}/edit?attachment=failed`);
+					throw new ApiError(0, "ATTACHMENT_FAILED", "");
+				}
+			}
+			return created;
+		},
+		onError: (error) => {
+			const code = error instanceof ApiError ? error.code : "";
+			if (ATTACHMENT_ERRORS[code]) setAttachmentError(ATTACHMENT_ERRORS[code]);
+		},
 		onSuccess: async ({ id }) => {
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: POLICIES_KEY }),
@@ -65,12 +240,25 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 	const willAskAgain =
 		existing !== null &&
 		existing.status !== "draft" &&
-		(values.title.trim() !== existing.title ||
+		(attachmentDirty ||
+			values.title.trim() !== existing.title ||
 			values.content.trim() !== existing.content);
+	const changeAttachment = (next: AttachmentDraft) => {
+		setAttachment(next);
+		setAttachmentDirty(true);
+	};
+	function saveAs(nextStatus: PolicyStatus) {
+		if (!values.content.trim()) {
+			setContentMissing(true);
+			return;
+		}
+		setContentMissing(false);
+		save.mutate(nextStatus);
+	}
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
-		save.mutate(status === "archived" ? "archived" : status);
+		saveAs(status === "archived" ? "archived" : status);
 	}
 
 	return (
@@ -109,7 +297,7 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 							disabled={save.isPending}
 							className={buttonClass()}
 							onClick={(event) => {
-								if (event.currentTarget.form?.reportValidity()) save.mutate("published");
+								if (event.currentTarget.form?.reportValidity()) saveAs("published");
 							}}
 						>
 							{t("policies.publish")}
@@ -128,7 +316,7 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 
 			<div className="mx-auto flex max-w-[1180px] flex-wrap items-start gap-6 p-4 md:p-6">
 				<div className="flex min-w-0 flex-[999_1_560px] flex-col gap-4">
-					{save.isError && <Alert>{t("error.generic")}</Alert>}
+					{save.isError && !ATTACHMENT_ERRORS[save.error instanceof ApiError ? save.error.code : ""] && <Alert>{t("error.generic")}</Alert>}
 					{willAskAgain && (
 						<p className="rounded-md bg-warning-surface px-3 py-2 text-warning-foreground">
 							{t("policies.new_version_warning")}
@@ -168,16 +356,21 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 							/>
 						</div>
 					</section>
-					<section className="rounded-card border border-border bg-card p-5">
-						<TextareaField
-							label={t("policies.content")}
-							required
-							maxLength={100000}
-							rows={18}
-							value={values.content}
-							onChange={(event) => set("content", event.target.value)}
-						/>
+					<section className="flex flex-col gap-2.5 rounded-card border border-border bg-card p-5">
+						<h2 className="text-base font-semibold">{t("policies.content")}</h2>
+						<Suspense fallback={<PageLoading />}>
+							<RichEditor
+								label={t("policies.content")}
+								initial={existing?.content ?? ""}
+								onChange={(value) => {
+									setContentMissing(false);
+									set("content", value);
+								}}
+							/>
+						</Suspense>
+						{contentMissing && <p className="text-xs text-danger-foreground">{t("policies.content_required")}</p>}
 					</section>
+					<AttachmentSection value={attachment} error={attachmentError} onChange={changeAttachment} onError={setAttachmentError} />
 				</div>
 
 				<aside className="flex min-w-0 flex-[1_1_300px] flex-col gap-4 lg:max-w-[360px]">
@@ -285,14 +478,17 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 }
 
 export function PolicyEditorPage({ id }: { id?: string }) {
+	const search = useSearch();
 	const policy = useQuery({
 		queryKey: ["policy", id],
 		enabled: id !== undefined,
 		queryFn: () => api<PolicyDraft>(`/policies/${id}`),
 	});
 
+	const attachmentFailed = new URLSearchParams(search).get("attachment") === "failed";
+
 	if (id === undefined) return <Editor existing={null} />;
 	if (policy.isPending) return <PageLoading />;
 	if (policy.isError) return <PageError onRetry={() => policy.refetch()} />;
-	return <Editor key={id} existing={policy.data} />;
+	return <Editor key={id} existing={policy.data} attachmentFailed={attachmentFailed} />;
 }

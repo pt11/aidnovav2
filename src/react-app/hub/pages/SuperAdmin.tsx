@@ -1444,7 +1444,7 @@ export function SuperModulesPage({ me }: { me: Me }) {
 										aria-valuemin={0}
 										aria-valuemax={100}
 										aria-label={`${MODULE_NAMES[module.key]} adoption`}
-										className="h-1.5 rounded-full bg-muted"
+										className="h-1.5 rounded-full bg-input"
 									>
 										<div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
 									</div>
@@ -1721,7 +1721,7 @@ export function SuperStoragePage({ me }: { me: Me }) {
 														: " · no limit"}
 												</span>
 												{org.storageLimitBytes !== null && (
-													<span className="mt-1 block h-1.5 max-w-52 overflow-hidden rounded-full bg-muted">
+													<span className="mt-1 block h-1.5 max-w-52 overflow-hidden rounded-full bg-input">
 														<span
 															className={`block h-full rounded-full ${percent >= 90 ? "bg-destructive" : "bg-primary"}`}
 															style={{ width: `${percent}%` }}

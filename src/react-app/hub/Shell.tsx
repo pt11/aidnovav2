@@ -8,6 +8,7 @@ import {
 	Check,
 	ChevronsUpDown,
 	Compass,
+	Contact,
 	Search,
 	Sparkles,
 	FileText,
@@ -20,16 +21,21 @@ import {
 	Menu,
 	Moon,
 	MoreHorizontal,
+	PanelLeftClose,
+	PanelLeftOpen,
 	Settings,
+	ShieldCheck,
 	Sun,
 	UserCircle,
 	Users,
 	X,
 	type LucideIcon,
 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { api, authClient, type Me, type Membership, type Role } from "./api";
 import { useI18n } from "./i18n";
+import { AskPanel } from "./AskPanel";
+import { useCapacityMe } from "./pages/Capacity";
 import { Avatar, LanguageSwitch } from "./ui";
 
 interface NavItem {
@@ -58,6 +64,7 @@ const CORE_ITEMS: NavItem[] = [
 const MODULE_ITEMS: { key: string; item: NavItem }[] = [
 	{ key: "projects", item: { url: "/projects", icon: FolderKanban, labelKey: "nav.projects" } },
 	{ key: "capacity_building", item: { url: "/capacity", icon: Award, labelKey: "nav.capacity" } },
+	{ key: "people_directory", item: { url: "/directory", icon: Contact, labelKey: "nav.directory" } },
 ];
 
 function moduleItems(activeModules: string[]) {
@@ -141,19 +148,30 @@ function useOrgSwitch() {
 	});
 }
 
-function OrgLabel({ org }: { org: Membership }) {
+function OrgLabel({ org, staffCount }: { org: Membership; staffCount?: number }) {
 	const { t } = useI18n();
 	return (
 		<span className="min-w-0 flex-1 leading-tight">
 			<span className="block truncate font-semibold">{org.name}</span>
 			<span className="block truncate text-xs text-muted-foreground">
 				{t(`role.${org.role}`)}
+				{staffCount !== undefined && ` · ${t("shell.staff_count", { count: staffCount })}`}
 			</span>
 		</span>
 	);
 }
 
-function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
+function OrgSwitcher({
+	me,
+	org,
+	folded = false,
+	staffCount,
+}: {
+	me: Me;
+	org: Membership;
+	folded?: boolean;
+	staffCount?: number;
+}) {
 	const { t } = useI18n();
 	const [open, setOpen] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -176,10 +194,17 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 	}, [open]);
 
 	if (me.memberships.length < 2) {
+		if (folded) {
+			return (
+				<div title={org.name} className="grid h-11 place-items-center">
+					<OrgMark org={org} size={32} />
+				</div>
+			);
+		}
 		return (
 			<div className="flex items-center gap-2.5 rounded-[9px] border border-border bg-background px-2.5 py-2">
 				<OrgMark org={org} size={32} />
-				<OrgLabel org={org} />
+				<OrgLabel org={org} staffCount={staffCount} />
 			</div>
 		);
 	}
@@ -190,15 +215,20 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 				type="button"
 				aria-expanded={open}
 				aria-label={`${t("org.switch")}: ${org.name}`}
+				title={folded ? org.name : undefined}
 				onClick={() => setOpen((value) => !value)}
-				className="flex w-full items-center gap-2.5 rounded-[9px] border border-border bg-background px-2.5 py-2 text-left hover:bg-muted"
+				className={
+					folded
+						? "grid h-11 w-full place-items-center rounded-[9px] hover:bg-muted"
+						: "flex w-full items-center gap-2.5 rounded-[9px] border border-border bg-background px-2.5 py-2 text-left hover:bg-muted"
+				}
 			>
 				<OrgMark org={org} size={32} />
-				<OrgLabel org={org} />
-				<ChevronsUpDown size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />
+				{!folded && <OrgLabel org={org} staffCount={staffCount} />}
+				{!folded && <ChevronsUpDown size={16} className="shrink-0 text-muted-foreground" aria-hidden="true" />}
 			</button>
 			{open && (
-				<ul className="absolute inset-x-0 top-full z-30 mt-1 rounded-md border border-border bg-card p-1 shadow-lg">
+				<ul className={`absolute top-full z-30 mt-1 rounded-md ${folded ? "left-0 w-60" : "inset-x-0"} border border-border bg-card p-1 shadow-lg`}>
 					{me.memberships.map((membership) => (
 						<li key={membership.organizationId}>
 							<button
@@ -227,7 +257,7 @@ function OrgSwitcher({ me, org }: { me: Me; org: Membership }) {
 
 const TRIAL_DAYS = 14;
 
-function TrialCard({ org }: { org: Membership }) {
+function TrialCard({ org, folded = false }: { org: Membership; folded?: boolean }) {
 	const { t } = useI18n();
 	const [now] = useState(() => Date.now());
 	if (org.subscriptionStatus !== "trial" || !org.trialEndDate) return null;
@@ -236,6 +266,25 @@ function TrialCard({ org }: { org: Membership }) {
 		Math.ceil((new Date(org.trialEndDate).getTime() - now) / 86_400_000),
 	);
 	const percent = Math.min(100, Math.round((days / TRIAL_DAYS) * 100));
+	if (folded) {
+		const bar = (
+			<span
+				role="progressbar"
+				aria-valuenow={percent}
+				aria-valuemin={0}
+				aria-valuemax={100}
+				aria-label={`${t("shell.free_trial")}: ${t("trial.days_left", { days })}`}
+				title={`${t("shell.free_trial")}: ${t("trial.days_left", { days })}`}
+				className="block h-1.5 overflow-hidden rounded-full bg-input"
+			>
+				<span
+					className={`block h-full rounded-full ${days <= 3 ? "bg-destructive" : "bg-primary"}`}
+					style={{ width: `${percent}%` }}
+				/>
+			</span>
+		);
+		return canManage(org.role) ? <Link href="/settings/plan" className="block py-1">{bar}</Link> : <div className="py-1">{bar}</div>;
+	}
 	return (
 		<div className="rounded-[9px] border border-border p-3">
 			<div className="flex justify-between gap-2 text-xs">
@@ -250,7 +299,7 @@ function TrialCard({ org }: { org: Membership }) {
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-label={t("shell.free_trial")}
-				className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+				className="mt-2 h-1.5 overflow-hidden rounded-full bg-input"
 			>
 				<div
 					className={`h-full rounded-full ${days <= 3 ? "bg-destructive" : "bg-primary"}`}
@@ -274,7 +323,7 @@ interface NavGroup {
 function navGroups(role: Role, activeModules: string[]): NavGroup[] {
 	const [announcements, dashboard, hub, policies, courses, files, calendar] = CORE_ITEMS;
 	return [
-		{ labelKey: "shell.workspace", items: [dashboard, announcements, hub] },
+		{ labelKey: "shell.workspace", items: [announcements, dashboard, hub] },
 		{ labelKey: "shell.content", items: [...moduleItems(activeModules), policies, courses, files, calendar] },
 		canManage(role)
 			? { labelKey: "shell.manage", items: MANAGER_ITEMS }
@@ -282,21 +331,93 @@ function navGroups(role: Role, activeModules: string[]): NavGroup[] {
 	];
 }
 
+function CapacitySubNav({ onNavigate }: { onNavigate?: () => void }) {
+	const { t } = useI18n();
+	const [location] = useLocation();
+	const me = useCapacityMe();
+	const items = [
+		{ url: "/capacity", label: t("cb.my_training"), active: location === "/capacity" || /^\/capacity\/records\//.test(location), count: 0 },
+		{ url: "/capacity/report", label: t("cb.submit_training"), active: location === "/capacity/report", count: 0 },
+		{ url: "/capacity/skills", label: t("cb.skills_title"), active: location === "/capacity/skills", count: 0 },
+		...(me.data?.reportScopes.length
+			? [{ url: "/capacity/team", label: t("cb.team_title"), active: location === "/capacity/team", count: 0 }]
+			: []),
+		...(me.data?.canReview
+			? [{ url: "/capacity/reviews", label: t("cb.reviews"), active: location === "/capacity/reviews", count: me.data.reviewCount }]
+			: []),
+		...(me.data?.reportScopes.length
+			? [{ url: "/capacity/training-report", label: t("cb.report_nav"), active: location === "/capacity/training-report", count: 0 }]
+			: []),
+		...(me.data?.isAdmin
+			? [{ url: "/capacity/settings", label: t("cb.module_settings"), active: location === "/capacity/settings", count: 0 }]
+			: []),
+	];
+	return (
+		<ul className="mb-1 ml-[21px] mt-0.5 flex flex-col gap-px border-l border-border pl-2.5 text-[13px]">
+			{items.map((item) => (
+				<li key={item.url}>
+					<Link
+						href={item.url}
+						onClick={onNavigate}
+						aria-current={item.active ? "page" : undefined}
+						className={`flex items-center justify-between gap-2 rounded px-2 py-1 text-foreground no-underline ${item.active ? "bg-muted font-semibold" : "hover:bg-muted"}`}
+					>
+						{item.label}
+						{item.count > 0 && (
+							<span className="rounded-full bg-destructive px-1.5 text-[11px] font-bold text-primary-foreground">{item.count}</span>
+						)}
+					</Link>
+				</li>
+			))}
+		</ul>
+	);
+}
+
+function ProjectsSubNav({ onNavigate }: { onNavigate?: () => void }) {
+	const { t } = useI18n();
+	const search = useSearch();
+	const [location] = useLocation();
+	const mine = new URLSearchParams(search).get("view") === "mine";
+	const items = [
+		{ url: "/projects", label: t("pr.all"), active: location === "/projects" && !mine },
+		{ url: "/projects?view=mine", label: t("pr.mine"), active: location === "/projects" && mine },
+		{ url: "/projects/portfolio", label: t("pr.portfolio"), active: location === "/projects/portfolio" },
+	];
+	return (
+		<ul className="mb-1 ml-[21px] mt-0.5 flex flex-col gap-px border-l border-border pl-2.5 text-[13px]">
+			{items.map((item) => (
+				<li key={item.url}>
+					<Link
+						href={item.url}
+						onClick={onNavigate}
+						aria-current={item.active ? "page" : undefined}
+						className={`block rounded px-2 py-1 text-foreground no-underline ${item.active ? "bg-muted font-semibold" : "hover:bg-muted"}`}
+					>
+						{item.label}
+					</Link>
+				</li>
+			))}
+		</ul>
+	);
+}
+
 function SidebarContent({
 	me,
 	org,
 	onNavigate,
+	folded = false,
 }: {
 	me: Me;
 	org: Membership;
 	onNavigate?: () => void;
+	folded?: boolean;
 }) {
 	const { t } = useI18n();
 	const [location] = useLocation();
 	const queryClient = useQueryClient();
 	const dashboard = useQuery({
 		queryKey: ["dashboard"],
-		queryFn: () => api<{ pendingPolicies: unknown[] }>("/dashboard"),
+		queryFn: () => api<{ pendingPolicies: unknown[]; members: number }>("/dashboard"),
 	});
 	const pendingPolicies = dashboard.data?.pendingPolicies.length ?? 0;
 
@@ -309,17 +430,27 @@ function SidebarContent({
 	return (
 		<>
 			<div className="px-3 pt-3.5">
-				<OrgSwitcher me={me} org={org} />
+				<OrgSwitcher
+					me={me}
+					org={org}
+					folded={folded}
+					staffCount={canManage(org.role) ? dashboard.data?.members : undefined}
+				/>
 			</div>
 			<nav
 				aria-label={t("shell.main_nav")}
 				className="flex-1 overflow-y-auto px-3 pt-4 pb-2"
 			>
 				{navGroups(org.role, me.activeModules).map((group, index) => (
-					<div key={group.labelKey} className={index > 0 ? "mt-3.5" : ""}>
-						<p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
-							{t(group.labelKey)}
-						</p>
+					<div
+						key={group.labelKey}
+						className={index === 0 ? "" : folded ? "mt-2.5 border-t border-border pt-2.5" : "mt-3.5"}
+					>
+						{!folded && (
+							<p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+								{t(group.labelKey)}
+							</p>
+						)}
 						<ul className="flex flex-col gap-0.5">
 							{group.items.map((item) => {
 								const active = isActivePath(location, item.url);
@@ -330,20 +461,30 @@ function SidebarContent({
 											href={item.url}
 											onClick={onNavigate}
 											aria-current={active ? "page" : undefined}
-											className={`flex min-h-9 items-center gap-2.5 rounded-md px-2.5 no-underline transition-colors ${
+											aria-label={folded ? t(item.labelKey) : undefined}
+											title={folded ? t(item.labelKey) : undefined}
+											className={`relative flex min-h-9 items-center gap-2.5 rounded-md no-underline transition-colors ${
+												folded ? "justify-center" : "px-2.5"
+											} ${
 												active
 													? "bg-primary font-medium text-primary-foreground"
 													: "text-foreground hover:bg-muted"
 											}`}
 										>
 											<item.icon size={18} aria-hidden="true" className="shrink-0" />
-											<span className="min-w-0 flex-1 truncate">{t(item.labelKey)}</span>
+											{!folded && <span className="min-w-0 flex-1 truncate">{t(item.labelKey)}</span>}
 											{badge > 0 && (
-												<span className="rounded-full bg-destructive px-[7px] text-[11px] font-semibold text-primary-foreground">
+												<span
+													className={`rounded-full bg-destructive text-[11px] font-semibold text-primary-foreground ${
+														folded ? "absolute -right-1 -top-1 min-w-4 px-1 text-center leading-4" : "px-[7px]"
+													}`}
+												>
 													{badge}
 												</span>
 											)}
 										</Link>
+										{item.url === "/capacity" && active && !folded && <CapacitySubNav onNavigate={onNavigate} />}
+										{item.url === "/projects" && active && !folded && <ProjectsSubNav onNavigate={onNavigate} />}
 									</li>
 								);
 							})}
@@ -355,18 +496,28 @@ function SidebarContent({
 				{me.user.isSuperAdmin && (
 					<Link
 						href="/superadmin"
-						className="rounded-[9px] border border-border px-3 py-2 text-xs font-semibold text-foreground no-underline hover:bg-muted"
+						aria-label={folded ? t("shell.platform_admin") : undefined}
+						title={folded ? t("shell.platform_admin") : undefined}
+						className={
+							folded
+								? "grid min-h-9 place-items-center rounded-md text-foreground hover:bg-muted"
+								: "rounded-[9px] border border-border px-3 py-2 text-xs font-semibold text-foreground no-underline hover:bg-muted"
+						}
 					>
-						{t("shell.platform_admin")}
+						{folded ? <ShieldCheck size={18} aria-hidden="true" /> : t("shell.platform_admin")}
 					</Link>
 				)}
-				<TrialCard org={org} />
-				<div className="flex items-center gap-2.5 p-1">
-					<Avatar name={me.user.name} photoUrl={org.photoUrl} />
-					<div className="min-w-0 flex-1 leading-tight">
-						<p className="truncate font-semibold">{me.user.name}</p>
-						<p className="truncate text-xs text-muted-foreground">{me.user.email}</p>
-					</div>
+				<TrialCard org={org} folded={folded} />
+				<div className={folded ? "flex flex-col items-center gap-2" : "flex items-center gap-2.5 p-1"}>
+					<span title={folded ? me.user.name : undefined} className="contents">
+						<Avatar name={me.user.name} photoUrl={org.photoUrl} />
+					</span>
+					{!folded && (
+						<div className="min-w-0 flex-1 leading-tight">
+							<p className="truncate font-semibold">{me.user.name}</p>
+							<p className="truncate text-xs text-muted-foreground">{me.user.email}</p>
+						</div>
+					)}
 					<button
 						type="button"
 						onClick={signOut}
@@ -478,7 +629,19 @@ function HeaderSearch() {
 	);
 }
 
-export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
+export function Header({
+	onOpenMenu,
+	askOpen = false,
+	onToggleAsk,
+	sidebarFolded = false,
+	onToggleSidebar,
+}: {
+	onOpenMenu?: () => void;
+	askOpen?: boolean;
+	onToggleAsk?: () => void;
+	sidebarFolded?: boolean;
+	onToggleSidebar?: () => void;
+}) {
 	const { t } = useI18n();
 	const { dark, toggle } = useTheme();
 	const iconButton =
@@ -495,16 +658,34 @@ export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
 					<Menu size={18} aria-hidden="true" />
 				</button>
 			)}
+			{onToggleSidebar && (
+				<button
+					type="button"
+					onClick={onToggleSidebar}
+					aria-expanded={!sidebarFolded}
+					aria-label={t(sidebarFolded ? "shell.sidebar_unfold" : "shell.sidebar_fold")}
+					title={t(sidebarFolded ? "shell.sidebar_unfold" : "shell.sidebar_fold")}
+					className={`${iconButton} max-md:hidden md:-ml-2 md:mr-[-4px]`}
+				>
+					{sidebarFolded ? <PanelLeftOpen size={18} aria-hidden="true" /> : <PanelLeftClose size={18} aria-hidden="true" />}
+				</button>
+			)}
 			{onOpenMenu && <HeaderSearch />}
 			<div className="ml-auto flex items-center gap-1.5">
-				{onOpenMenu && (
-					<Link
-						href="/hub"
-						className="hidden h-9 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-[13px] font-medium text-foreground no-underline hover:bg-muted lg:inline-flex"
+				{onToggleAsk && (
+					<button
+						type="button"
+						aria-pressed={askOpen}
+						aria-label={t("shell.ask_aidnova")}
+						title={`${t("shell.ask_aidnova")} (⌘J)`}
+						onClick={onToggleAsk}
+						className={`inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 text-[13px] font-semibold md:px-3.5 ${
+							askOpen ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-muted"
+						}`}
 					>
-						<Sparkles size={16} aria-hidden="true" className="text-accent" />
-						{t("shell.ask_aidnova")}
-					</Link>
+						<Sparkles size={16} aria-hidden="true" className={askOpen ? "" : "text-accent"} />
+						<span className={askOpen ? "hidden 2xl:inline" : "hidden md:inline"}>{t("shell.ask_aidnova")}</span>
+					</button>
 				)}
 				<LanguageSwitch />
 				<button
@@ -637,6 +818,14 @@ function MobileBottomNav({ role, activeModules }: { role: Role; activeModules: s
 	);
 }
 
+function readSidebarFolded() {
+	try {
+		return localStorage.getItem("aidnova_sidebar") === "folded";
+	} catch {
+		return false;
+	}
+}
+
 export function WorkspaceShell({
 	me,
 	org,
@@ -648,8 +837,13 @@ export function WorkspaceShell({
 }) {
 	const { t } = useI18n();
 	const [drawerOpen, setDrawerOpen] = useState(false);
+	const [askOpen, setAskOpen] = useState(false);
+	const [askExpanded, setAskExpanded] = useState(false);
+	const [sidebarFolded, setSidebarFolded] = useState(readSidebarFolded);
 	const [location] = useLocation();
 	const isLesson = /^\/courses\/[^/]+\/lessons\/[^/]+/.test(location);
+	const isReadingPolicy = !canManage(org.role) && /^\/policies\/\d+$/.test(location);
+	const isFocused = isLesson || isReadingPolicy;
 
 	useEffect(() => {
 		if (!drawerOpen) return;
@@ -660,11 +854,43 @@ export function WorkspaceShell({
 		return () => document.removeEventListener("keydown", onKeyDown);
 	}, [drawerOpen]);
 
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
+				event.preventDefault();
+				setAskOpen((current) => !current);
+			} else if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
+				setAskOpen(false);
+			}
+		};
+		const openAsk = () => setAskOpen(true);
+		document.addEventListener("keydown", onKeyDown);
+		window.addEventListener("aidnova-ask", openAsk);
+		return () => {
+			document.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("aidnova-ask", openAsk);
+		};
+	}, []);
+
+	function toggleSidebar() {
+		const next = !sidebarFolded;
+		setSidebarFolded(next);
+		try {
+			localStorage.setItem("aidnova_sidebar", next ? "folded" : "open");
+		} catch {
+			// The choice just won't persist, for example in a private window.
+		}
+	}
+
 	return (
 		<div className="flex h-dvh overflow-hidden">
-			{!isLesson && (
-			<aside className="hidden w-[248px] shrink-0 flex-col border-r border-border bg-card md:flex">
-				<SidebarContent me={me} org={org} />
+			{!isFocused && (
+			<aside
+				className={`hidden shrink-0 flex-col border-r border-border bg-card transition-[width] duration-150 motion-reduce:transition-none md:flex ${
+					sidebarFolded ? "w-[68px]" : "w-[248px]"
+				}`}
+			>
+				<SidebarContent me={me} org={org} folded={sidebarFolded} />
 			</aside>
 			)}
 
@@ -694,12 +920,28 @@ export function WorkspaceShell({
 				</div>
 			)}
 
-			<div className="flex min-w-0 flex-1 flex-col">
-				{!isLesson && <Header onOpenMenu={() => setDrawerOpen(true)} />}
-				<main className={`relative min-h-0 flex-1 ${isLesson ? "overflow-hidden" : "overflow-auto pb-16 md:pb-0"}`}>
+			<div className={`flex min-w-0 flex-1 flex-col ${askOpen && askExpanded ? "xl:hidden" : ""}`}>
+				{!isFocused && (
+					<Header
+						onOpenMenu={() => setDrawerOpen(true)}
+						askOpen={askOpen}
+						onToggleAsk={() => setAskOpen((current) => !current)}
+						sidebarFolded={sidebarFolded}
+						onToggleSidebar={toggleSidebar}
+					/>
+				)}
+				<main className={`relative min-h-0 flex-1 ${isLesson ? "overflow-hidden" : "overflow-auto pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0"}`}>
 					{children}
 				</main>
 			</div>
+
+			<AskPanel
+				open={askOpen}
+				expanded={askExpanded}
+				name={me.user.name}
+				onClose={() => setAskOpen(false)}
+				onToggleExpanded={() => setAskExpanded((current) => !current)}
+			/>
 
 			<MobileBottomNav role={org.role} activeModules={me.activeModules} />
 		</div>

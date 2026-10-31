@@ -1,6 +1,6 @@
 import { recordView } from "./reports";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getBaseUrl } from "./auth";
 import type { Db } from "./db";
 import {
@@ -22,7 +22,8 @@ import {
 	type AppEnv,
 	type Membership,
 } from "./middleware";
-import { cleanText, readJson } from "./validate";
+import { getOrgLimits, getStorageUsed } from "./plans";
+import { cleanText, isSafeLink, readJson } from "./validate";
 
 const CATEGORIES = [
 	"Human Resources",
@@ -435,6 +436,8 @@ function readPolicy(body: Record<string, unknown>) {
 			reviewDate,
 		},
 		departmentIds: departmentIds as number[],
+		// The attached document is part of what people acknowledge.
+		attachmentChanged: body.attachmentChanged === true,
 	};
 }
 
@@ -632,6 +635,155 @@ policyRoutes.get("/policies/:id", requireUser, requireOrg, async (c) => {
 		updatedAt: policy.updatedAt,
 		departments: allowed,
 		acknowledgedAt: ack?.acknowledgedAt ?? null,
+		attachment: policy.attachmentType
+			? {
+					type: policy.attachmentType,
+					name: policy.attachmentName,
+					url: policy.attachmentUrl,
+					mimeType: policy.attachmentMime,
+					sizeBytes: policy.attachmentBytes,
+				}
+			: null,
+	});
+});
+
+const ATTACHMENT_TYPES: Record<string, string> = {
+	pdf: "application/pdf",
+	doc: "application/msword",
+	docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	xls: "application/vnd.ms-excel",
+	xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	ppt: "application/vnd.ms-powerpoint",
+	pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	png: "image/png",
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	webp: "image/webp",
+};
+const ATTACHMENT_PREVIEW = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp"]);
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const NO_ATTACHMENT = {
+	attachmentType: null,
+	attachmentName: null,
+	attachmentUrl: null,
+	attachmentKey: null,
+	attachmentMime: null,
+	attachmentBytes: null,
+};
+
+function auditAttachment(c: Context<AppEnv>, policyId: number, change: string) {
+	return c.get("db").insert(auditLog).values({
+		organizationId: c.get("org").organizationId,
+		actorUserId: c.get("user").id,
+		action: `policy.attachment_${change}`,
+		targetType: "policy",
+		targetId: String(policyId),
+	});
+}
+
+// The body is the file itself, streamed straight to storage. Anyone who can read
+// the policy can open this, so it's checked against the policy, not separately.
+policyRoutes.put("/policies/:id/attachment/file", requireUser, requireOrg, requireManager, async (c) => {
+	const db = c.get("db");
+	const org = c.get("org");
+	const policy = await loadPolicy(db, Number(c.req.param("id")), org.organizationId);
+	if (!policy) return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	const name = cleanText(c.req.query("name"));
+	const mimeType = ATTACHMENT_TYPES[name.split(".").pop()?.toLowerCase() ?? ""];
+	const declaredSize = Number(c.req.header("content-length"));
+	if (name.length < 1 || name.length > 300) return jsonError(c, 400, "INVALID_NAME", "That file needs a name.");
+	if (!mimeType) return jsonError(c, 400, "TYPE_NOT_ALLOWED", "That type of file isn't allowed.");
+	if (!Number.isFinite(declaredSize) || declaredSize <= 0 || !c.req.raw.body) {
+		return jsonError(c, 400, "EMPTY_FILE", "That file is empty.");
+	}
+	if (declaredSize > MAX_ATTACHMENT_BYTES) return jsonError(c, 413, "FILE_TOO_LARGE", "Files can be up to 50 MB.");
+	const [used, limits] = await Promise.all([getStorageUsed(db, org.organizationId), getOrgLimits(db, org.organizationId)]);
+	const freed = policy.attachmentBytes ?? 0;
+	if (limits.storageLimitBytes !== null && used - freed + declaredSize > limits.storageLimitBytes) {
+		return jsonError(c, 413, "STORAGE_FULL", "Your organization's storage is full.");
+	}
+	const storageKey = `org/${org.organizationId}/policies/${crypto.randomUUID()}`;
+	const stored = await c.env.FILES.put(storageKey, c.req.raw.body, { httpMetadata: { contentType: mimeType } });
+	try {
+		await db
+			.update(policies)
+			.set({
+				...NO_ATTACHMENT,
+				attachmentType: "file",
+				attachmentName: name,
+				attachmentKey: storageKey,
+				attachmentMime: mimeType,
+				attachmentBytes: stored.size,
+			})
+			.where(eq(policies.id, policy.id));
+	} catch (error) {
+		await c.env.FILES.delete(storageKey);
+		throw error;
+	}
+	if (policy.attachmentKey) await c.env.FILES.delete(policy.attachmentKey);
+	await auditAttachment(c, policy.id, "uploaded");
+	return c.json({ ok: true });
+});
+
+policyRoutes.put("/policies/:id/attachment/link", requireUser, requireOrg, requireManager, async (c) => {
+	const db = c.get("db");
+	const org = c.get("org");
+	const policy = await loadPolicy(db, Number(c.req.param("id")), org.organizationId);
+	if (!policy) return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	const body = await readJson(c.req.raw);
+	const url = cleanText(body.url);
+	const name = cleanText(body.name) || url;
+	if (!isSafeLink(url, ["https:", "http:"])) return jsonError(c, 400, "INVALID_LINK", "Enter a full link.");
+	if (name.length > 300) return jsonError(c, 400, "INVALID_NAME", "That name is too long.");
+	await db
+		.update(policies)
+		.set({ ...NO_ATTACHMENT, attachmentType: "link", attachmentName: name, attachmentUrl: url })
+		.where(eq(policies.id, policy.id));
+	if (policy.attachmentKey) await c.env.FILES.delete(policy.attachmentKey);
+	await auditAttachment(c, policy.id, "linked");
+	return c.json({ ok: true });
+});
+
+policyRoutes.delete("/policies/:id/attachment", requireUser, requireOrg, requireManager, async (c) => {
+	const db = c.get("db");
+	const policy = await loadPolicy(db, Number(c.req.param("id")), c.get("org").organizationId);
+	if (!policy) return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	await db.update(policies).set(NO_ATTACHMENT).where(eq(policies.id, policy.id));
+	if (policy.attachmentKey) await c.env.FILES.delete(policy.attachmentKey);
+	await auditAttachment(c, policy.id, "removed");
+	return c.json({ ok: true });
+});
+
+policyRoutes.get("/policies/:id/attachment", requireUser, requireOrg, async (c) => {
+	const db = c.get("db");
+	const org = c.get("org");
+	const policy = await loadPolicy(db, Number(c.req.param("id")), org.organizationId);
+	if (!policy) return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	const [access, departmentId] = await Promise.all([
+		loadAccess(db, org.organizationId),
+		getOwnDepartmentId(db, org, c.get("user").id),
+	]);
+	const accessIds = (access.get(policy.id) ?? []).map((department) => department.id);
+	if (!canRead(policy, accessIds, org, departmentId)) {
+		return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	}
+	const object = policy.attachmentKey ? await c.env.FILES.get(policy.attachmentKey) : null;
+	if (!object || !policy.attachmentName) return jsonError(c, 404, "NOT_FOUND", "That file doesn't exist.");
+	const mimeType = policy.attachmentMime ?? "application/octet-stream";
+	const inline = c.req.query("download") !== "1" && ATTACHMENT_PREVIEW.has(mimeType);
+	const ascii = policy.attachmentName.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+	return new Response(object.body, {
+		headers: {
+			"Content-Type": mimeType,
+			"Content-Length": String(object.size),
+			"Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(policy.attachmentName)}`,
+			"Cache-Control": "private, no-store",
+			"X-Content-Type-Options": "nosniff",
+			"Content-Security-Policy":
+				mimeType === "application/pdf"
+					? "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'"
+					: "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+		},
 	});
 });
 
@@ -665,7 +817,8 @@ policyRoutes.patch(
 		// and earlier acknowledgments no longer count.
 		const reworded =
 			existing.title !== input.values.title ||
-			existing.content !== input.values.content;
+			existing.content !== input.values.content ||
+			input.attachmentChanged;
 		const version =
 			existing.status !== "draft" && reworded
 				? existing.version + 1
@@ -720,6 +873,7 @@ policyRoutes.delete(
 		if (!existing) {
 			return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
 		}
+		if (existing.attachmentKey) await c.env.FILES.delete(existing.attachmentKey);
 		await db.batch([
 			db.delete(policies).where(eq(policies.id, existing.id)),
 			db.insert(auditLog).values({

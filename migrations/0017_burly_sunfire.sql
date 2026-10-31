@@ -1,0 +1,1 @@
+ALTER TABLE `project_reports` ADD `submitted_by` text REFERENCES user(id);

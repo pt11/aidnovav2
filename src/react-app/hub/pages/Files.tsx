@@ -1,7 +1,6 @@
 import { useRef, useState, type DragEvent, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	ArrowLeft,
 	File as FileIcon,
 	FileText,
 	Film,
@@ -24,6 +23,7 @@ import {
 	buttonClass,
 	ConfirmModal,
 	Field,
+	FilePreviewDrawer,
 	Modal,
 	PageError,
 	PageHeader,
@@ -604,22 +604,16 @@ function FileForm({
 	);
 }
 
-function FileLinks({ file, unlock }: { file: FileItem; unlock?: string }) {
+function FileLinks({ file, unlock, onPreview }: { file: FileItem; unlock?: string; onPreview: () => void }) {
 	const { t } = useI18n();
 	const suffix = unlock ? `?unlock=${encodeURIComponent(unlock)}` : "";
-	const previewSuffix = unlock ? `${suffix}&inline=1` : "?inline=1";
 	const actionClass = buttonClass("outline");
 	return (
 		<>
 			{file.canPreview && (
-				<a
-					href={`/api/files/${file.id}/download${previewSuffix}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					className={actionClass}
-				>
+				<button type="button" className={actionClass} onClick={onPreview}>
 					{t("files.preview")}
-				</a>
+				</button>
 			)}
 			<a href={`/api/files/${file.id}/download${suffix}`} className={actionClass}>
 				{t("files.download")}
@@ -633,11 +627,13 @@ function UnlockModal({
 	token,
 	onToken,
 	onClose,
+	onPreview,
 }: {
 	file: FileItem;
 	token?: string;
 	onToken: (scope: string, token: string) => void;
 	onClose: () => void;
+	onPreview: (token?: string) => void;
 }) {
 	const { t } = useI18n();
 	const [pin, setPin] = useState("");
@@ -680,7 +676,7 @@ function UnlockModal({
 							</a>
 						)
 					) : (
-						<FileLinks file={file} unlock={token} />
+						<FileLinks file={file} unlock={token} onPreview={() => onPreview(token)} />
 					)}
 				</div>
 			</div>
@@ -728,18 +724,96 @@ function UnlockModal({
 	);
 }
 
+// Applied one at a time, because each file keeps its own name and PIN.
+function BulkFilesDialog({
+	mode,
+	files,
+	folders,
+	onDone,
+}: {
+	mode: "move" | "access";
+	files: FileItem[];
+	folders: FolderItem[];
+	onDone: () => void;
+}) {
+	const { t } = useI18n();
+	const refresh = useRefreshLibrary();
+	const [folderId, setFolderId] = useState("");
+	const [departmentIds, setDepartmentIds] = useState<number[]>([]);
+	const save = useMutation({
+		mutationFn: async () => {
+			for (const file of files) {
+				await api(`/files/${file.id}`, {
+					method: "PATCH",
+					body: {
+						name: file.name,
+						folderId: mode === "move" ? (folderId ? Number(folderId) : null) : file.folderId,
+						departmentIds: mode === "access" ? departmentIds : file.departments.map((d) => d.id),
+					},
+				});
+			}
+		},
+		onSettled: refresh,
+		onSuccess: onDone,
+	});
+	const inFolders = files.filter((file) => file.folderId !== null).length;
+	return (
+		<Modal
+			title={t(mode === "move" ? "files.bulk_move" : "files.bulk_access")}
+			description={t("users.selected_count", { count: files.length })}
+			open
+			onClose={onDone}
+		>
+			<div className="flex flex-col gap-4">
+				{save.isError && <Alert>{t("error.generic")}</Alert>}
+				{mode === "move" ? (
+					<SelectField label={t("files.folder")} value={folderId} onChange={(event) => setFolderId(event.target.value)}>
+						<option value="">{t("files.no_folder")}</option>
+						{folders.map((folder) => (
+							<option key={folder.id} value={folder.id}>
+								{folder.name}
+							</option>
+						))}
+					</SelectField>
+				) : (
+					<>
+						<DepartmentChecks selected={departmentIds} onChange={setDepartmentIds} />
+						{inFolders > 0 && (
+							<p className="text-xs leading-5 text-muted-foreground">{t("files.folder_rules_hint")}</p>
+						)}
+					</>
+				)}
+				<div className="flex justify-end gap-2">
+					<button type="button" className={buttonClass("outline")} onClick={onDone}>
+						{t("common.cancel")}
+					</button>
+					<button type="button" disabled={save.isPending} className={buttonClass()} onClick={() => save.mutate()}>
+						{t("common.save")}
+					</button>
+				</div>
+			</div>
+		</Modal>
+	);
+}
+
 function FileRow({
 	file,
 	folderName,
 	canManage,
+	selected,
+	onSelect,
 	onUnlock,
+	onPreview,
 	onEdit,
 	onDelete,
 }: {
 	file: FileItem;
 	folderName: string | null;
 	canManage: boolean;
+	selected: boolean;
+	onSelect: (selected: boolean) => void;
 	onUnlock: () => void;
+	onPreview: () => void;
 	onEdit: () => void;
 	onDelete: () => void;
 }) {
@@ -767,8 +841,7 @@ function FileRow({
 						? [
 								{
 									label: t("files.preview"),
-									href: `/api/files/${file.id}/download?inline=1`,
-									newTab: true,
+									onSelect: onPreview,
 								},
 							]
 						: []),
@@ -787,7 +860,16 @@ function FileRow({
 	];
 
 	return (
-		<li className="flex items-center gap-3 border-t border-border px-4 py-2.5 first:border-t-0">
+		<li className={`flex items-center gap-3 border-t border-border px-4 py-2.5 first:border-t-0 ${selected ? "bg-muted/60" : ""}`}>
+			{canManage && (
+				<input
+					type="checkbox"
+					aria-label={t("files.select", { name: file.name })}
+					className="size-4 shrink-0 accent-primary"
+					checked={selected}
+					onChange={(event) => onSelect(event.target.checked)}
+				/>
+			)}
 			<span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
 				<FileKindIcon file={file} />
 			</span>
@@ -835,11 +917,11 @@ function StorageUsage() {
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-label={t("files.storage")}
-				className="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
+				className="h-2 w-40 overflow-hidden rounded-full bg-input"
 			>
 				<span
 					className={`block h-full rounded-full ${percent >= 90 ? "bg-destructive" : "bg-primary"}`}
-					style={{ width: `${percent}%` }}
+					style={{ width: `${percent}%`, minWidth: usage.data.usedBytes > 0 ? 4 : 0 }}
 				/>
 			</span>
 			{t("files.storage_used", {
@@ -866,6 +948,9 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 	const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
 	const [unlocking, setUnlocking] = useState<FileItem | null>(null);
 	const [tokens, setTokens] = useState<Record<string, string>>({});
+	const [previewing, setPreviewing] = useState<{ file: FileItem; token?: string } | null>(null);
+	const [selectedIds, setSelectedIds] = useState<number[]>([]);
+	const [bulk, setBulk] = useState<"move" | "access" | null>(null);
 
 	const files = useQuery({
 		queryKey: FILES_KEY,
@@ -918,9 +1003,29 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 	const showFolders = !searching && currentFolderId === null;
 	const nothingHere =
 		visibleFiles.length === 0 && (!showFolders || folders.data.length === 0);
+	const selectedFiles = visibleFiles.filter((file) => selectedIds.includes(file.id));
+	const allSelected = visibleFiles.length > 0 && selectedFiles.length === visibleFiles.length;
 
 	return (
-		<div className="mx-auto max-w-5xl p-4 md:p-6">
+		<div className="p-4 md:px-6 md:py-7">
+			{currentFolderId !== null && (
+				<p className="mb-1 flex flex-wrap items-center gap-1.5 text-[13px] text-muted-foreground">
+					<Link href="/files" className="no-underline hover:underline">
+						{t("files.title")}
+					</Link>
+					<span aria-hidden="true">/</span>
+					<span>{currentFolder?.name}</span>
+					{canManage && currentFolder && (
+						<button
+							type="button"
+							className="ml-2 font-medium text-selected-foreground hover:underline"
+							onClick={() => setEditingFolder(currentFolder)}
+						>
+							{t("files.edit_folder")}
+						</button>
+					)}
+				</p>
+			)}
 			<PageHeader
 				title={currentFolder?.name ?? t("files.title")}
 				subtitle={currentFolder ? undefined : t(canManage ? "files.desc" : "files.desc_staff")}
@@ -949,27 +1054,6 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 					)
 				}
 			/>
-
-			{currentFolderId !== null && (
-				<div className="mt-2 flex flex-wrap items-center gap-3">
-					<Link
-						href="/files"
-						className="inline-flex items-center gap-1.5 text-sm text-muted-foreground no-underline hover:text-foreground"
-					>
-						<ArrowLeft size={15} aria-hidden="true" />
-						{t("files.back")}
-					</Link>
-					{canManage && currentFolder && (
-						<button
-							type="button"
-							className="text-sm font-medium text-selected-foreground hover:underline"
-							onClick={() => setEditingFolder(currentFolder)}
-						>
-							{t("files.edit_folder")}
-						</button>
-					)}
-				</div>
-			)}
 
 			{canManage && <StorageUsage />}
 
@@ -1033,12 +1117,51 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 				</ul>
 			)}
 
+			{selectedFiles.length > 0 && (
+				<div className="mt-4 flex flex-wrap items-center gap-2 rounded-card bg-foreground px-4 py-2.5 text-background">
+					<span className="mr-auto text-[13px] font-semibold">
+						{t("users.selected_count", { count: selectedFiles.length })}
+					</span>
+					{(
+						[
+							["move", "files.bulk_move"],
+							["access", "files.bulk_access"],
+						] as const
+					).map(([value, key]) => (
+						<button
+							key={value}
+							type="button"
+							className="rounded-md border border-background/30 px-3 py-1.5 text-[13px] font-medium hover:bg-background/10"
+							onClick={() => setBulk(value)}
+						>
+							{t(key)}
+						</button>
+					))}
+					<button
+						type="button"
+						className="rounded-md bg-background px-3 py-1.5 text-[13px] font-medium text-foreground"
+						onClick={() => setSelectedIds([])}
+					>
+						{t("files.bulk_clear")}
+					</button>
+				</div>
+			)}
+
 			{visibleFiles.length > 0 && (
 				<ul className="mt-4 rounded-card border border-border bg-card">
 					<li
-						aria-hidden="true"
 						className="hidden items-center gap-3 rounded-t-card bg-background px-4 py-2.5 text-xs font-semibold text-muted-foreground md:flex"
 					>
+						{canManage && (
+							<input
+								type="checkbox"
+								aria-label={t("files.select_all")}
+								className="size-4 shrink-0 accent-primary"
+								checked={allSelected}
+								onChange={(event) => setSelectedIds(event.target.checked ? visibleFiles.map((file) => file.id) : [])}
+							/>
+						)}
+						{canManage && <span className="w-9 shrink-0" />}
 						<span className="min-w-0 flex-1">{t("files.col_name")}</span>
 						<span className="w-36 shrink-0">{t("files.col_who")}</span>
 						<span className="hidden w-40 shrink-0 lg:block">{t("files.col_added")}</span>
@@ -1054,7 +1177,14 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 									: null
 							}
 							canManage={canManage}
+							selected={selectedIds.includes(file.id)}
+							onSelect={(selected) =>
+								setSelectedIds((current) =>
+									selected ? [...current, file.id] : current.filter((id) => id !== file.id),
+								)
+							}
 							onUnlock={() => setUnlocking(file)}
+							onPreview={() => setPreviewing({ file })}
 							onEdit={() => setEditingFile(file)}
 							onDelete={() => {
 								removeFile.reset();
@@ -1083,6 +1213,17 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 				/>
 			)}
 
+			{bulk && (
+				<BulkFilesDialog
+					mode={bulk}
+					files={selectedFiles}
+					folders={folders.data}
+					onDone={() => {
+						setBulk(null);
+						setSelectedIds([]);
+					}}
+				/>
+			)}
 			<Modal
 				title={t(editingFolder ? "files.edit_folder" : "files.new_folder")}
 				open={modal === "folder" || editingFolder !== null}
@@ -1137,9 +1278,22 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 							setTokens((current) => ({ ...current, [scope]: token }))
 						}
 						onClose={() => setUnlocking(null)}
+						onPreview={(token) => {
+							setPreviewing({ file: unlocking, token });
+							setUnlocking(null);
+						}}
 					/>
 				)}
 			</Modal>
+			{previewing && (
+				<FilePreviewDrawer
+					name={previewing.file.name}
+					mimeType={previewing.file.mimeType}
+					src={`/api/files/${previewing.file.id}/download?inline=1${previewing.token ? `&unlock=${encodeURIComponent(previewing.token)}` : ""}`}
+					downloadHref={`/api/files/${previewing.file.id}/download${previewing.token ? `?unlock=${encodeURIComponent(previewing.token)}` : ""}`}
+					onClose={() => setPreviewing(null)}
+				/>
+			)}
 			<ConfirmModal
 				title={t("files.delete_confirm_title")}
 				description={t("files.delete_file_desc", { name: deletingFile?.name ?? "" })}

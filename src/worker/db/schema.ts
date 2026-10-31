@@ -3,6 +3,7 @@ import {
 	index,
 	integer,
 	primaryKey,
+	real,
 	sqliteTable,
 	text,
 	uniqueIndex,
@@ -299,6 +300,13 @@ export const policies = sqliteTable(
 		title: text("title").notNull(),
 		category: text("category").notNull(),
 		content: text("content").notNull(),
+		// One optional document: either a stored file or a link somewhere else.
+		attachmentType: text("attachment_type", { enum: ["file", "link"] }),
+		attachmentName: text("attachment_name"),
+		attachmentUrl: text("attachment_url"),
+		attachmentKey: text("attachment_key"),
+		attachmentMime: text("attachment_mime"),
+		attachmentBytes: integer("attachment_bytes"),
 		status: text("status", { enum: ["draft", "published", "archived"] })
 			.notNull()
 			.default("draft"),
@@ -912,3 +920,482 @@ export const auditLog = sqliteTable(
 	},
 	(table) => [index("audit_log_org_idx").on(table.organizationId)],
 );
+
+// Capacity Building. Records stay between their owner and that owner's reviewers.
+export const capacityTeamReviewers = sqliteTable(
+	"capacity_team_reviewers",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		departmentId: integer("department_id")
+			.notNull()
+			.unique()
+			.references(() => departments.id, { onDelete: "cascade" }),
+		reviewerId: text("reviewer_id").references(() => user.id, { onDelete: "set null" }),
+		backupId: text("backup_id").references(() => user.id, { onDelete: "set null" }),
+		updatedAt: updatedAt(),
+	},
+	(table) => [index("capacity_team_reviewers_org_idx").on(table.organizationId)],
+);
+
+export const trainingRecords = sqliteTable(
+	"training_records",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		category: text("category"),
+		isSensitive: integer("is_sensitive", { mode: "boolean" }).notNull().default(false),
+		format: text("format", { enum: ["in_person", "online", "hybrid"] }),
+		startDate: text("start_date"),
+		endDate: text("end_date"),
+		durationValue: real("duration_value"),
+		durationUnit: text("duration_unit", { enum: ["training_days", "calendar_days", "contact_hours"] })
+			.notNull()
+			.default("training_days"),
+		trainingStatus: text("training_status", {
+			enum: ["applied", "started", "in_progress", "completed", "cancelled"],
+		})
+			.notNull()
+			.default("applied"),
+		applicationOutcome: text("application_outcome", { enum: ["applied", "accepted", "waitlisted", "declined"] }),
+		objectives: text("objectives"),
+		provider: text("provider"),
+		language: text("language", { enum: ["my", "en", "both"] }).notNull().default("my"),
+		// Never a precise place, and no GPS: withheld, a broad region, or online.
+		locationMode: text("location_mode", { enum: ["withheld", "region", "online"] }).notNull().default("withheld"),
+		region: text("region"),
+		reflection: text("reflection"),
+		shareReflection: integer("share_reflection", { mode: "boolean" }).notNull().default(false),
+		reviewStatus: text("review_status", {
+			enum: ["draft", "submitted", "under_review", "verified", "changes_requested", "rejected"],
+		})
+			.notNull()
+			.default("draft"),
+		version: integer("version").notNull().default(0),
+		submittedAt: integer("submitted_at", { mode: "timestamp_ms" }),
+		decidedAt: integer("decided_at", { mode: "timestamp_ms" }),
+		decidedBy: text("decided_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [
+		index("training_records_owner_idx").on(table.organizationId, table.userId),
+		index("training_records_review_idx").on(table.organizationId, table.reviewStatus),
+	],
+);
+
+export const trainingEvidence = sqliteTable(
+	"training_evidence",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		recordId: integer("record_id")
+			.notNull()
+			.references(() => trainingRecords.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		mimeType: text("mime_type").notNull(),
+		sizeBytes: integer("size_bytes").notNull(),
+		storageKey: text("storage_key").notNull(),
+		uploadedBy: text("uploaded_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		index("training_evidence_record_idx").on(table.recordId),
+		index("training_evidence_org_idx").on(table.organizationId),
+	],
+);
+
+export const trainingEvents = sqliteTable(
+	"training_events",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		recordId: integer("record_id")
+			.notNull()
+			.references(() => trainingRecords.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		actorId: text("actor_id").references(() => user.id, { onDelete: "set null" }),
+		kind: text("kind", {
+			enum: [
+				"submitted",
+				"withdrawn",
+				"review_started",
+				"verified",
+				"changes_requested",
+				"rejected",
+				"message",
+				"evidence_viewed",
+				"evidence_downloaded",
+			],
+		}).notNull(),
+		message: text("message"),
+		// Only reviewers ever get this one back.
+		privateNote: text("private_note"),
+		version: integer("version").notNull().default(0),
+		createdAt: createdAt(),
+	},
+	(table) => [index("training_events_record_idx").on(table.recordId)],
+);
+
+// Projects. Status says where work is, health says how it's going: a project can
+// be in progress and at risk at once.
+export const projects = sqliteTable(
+	"projects",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		code: text("code").notNull(),
+		category: text("category"),
+		description: text("description"),
+		priority: text("priority", { enum: ["low", "medium", "high"] }).notNull().default("medium"),
+		status: text("status", {
+			enum: ["draft", "planned", "in_progress", "on_hold", "completed", "cancelled", "archived"],
+		})
+			.notNull()
+			.default("planned"),
+		health: text("health", { enum: ["unknown", "healthy", "needs_attention", "at_risk"] })
+			.notNull()
+			.default("unknown"),
+		healthReason: text("health_reason"),
+		healthSetBy: text("health_set_by").references(() => user.id, { onDelete: "set null" }),
+		healthSetAt: integer("health_set_at", { mode: "timestamp_ms" }),
+		objectives: text("objectives"),
+		expectedOutcomes: text("expected_outcomes"),
+		startDate: text("start_date"),
+		endDate: text("end_date"),
+		ownerId: text("owner_id").references(() => user.id, { onDelete: "set null" }),
+		managerId: text("manager_id").references(() => user.id, { onDelete: "set null" }),
+		visibility: text("visibility", { enum: ["members", "organization"] }).notNull().default("members"),
+		funder: text("funder"),
+		budgetCurrency: text("budget_currency").notNull().default("USD"),
+		budgetAmount: real("budget_amount"),
+		beneficiaryTarget: integer("beneficiary_target"),
+		locations: text("locations"),
+		sdg: integer("sdg"),
+		reportingFrequency: text("reporting_frequency", { enum: ["monthly", "quarterly", "custom"] }),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+		completedBy: text("completed_by").references(() => user.id, { onDelete: "set null" }),
+		completionNotes: text("completion_notes"),
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [
+		uniqueIndex("projects_org_code_idx").on(table.organizationId, table.code),
+		index("projects_org_idx").on(table.organizationId),
+	],
+);
+
+export const projectMembers = sqliteTable(
+	"project_members",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		role: text("role", { enum: ["member", "viewer"] }).notNull().default("member"),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		uniqueIndex("project_members_unique_idx").on(table.projectId, table.userId),
+		index("project_members_user_idx").on(table.organizationId, table.userId),
+	],
+);
+
+export const projectMilestones = sqliteTable(
+	"project_milestones",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		dueDate: text("due_date").notNull(),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+		completedBy: text("completed_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		index("project_milestones_project_idx").on(table.projectId),
+		index("project_milestones_org_idx").on(table.organizationId),
+	],
+);
+
+export const projectActivity = sqliteTable(
+	"project_activity",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		actorId: text("actor_id").references(() => user.id, { onDelete: "set null" }),
+		kind: text("kind").notNull(),
+		detail: text("detail"),
+		createdAt: createdAt(),
+	},
+	(table) => [index("project_activity_project_idx").on(table.projectId)],
+);
+
+export const projectFolders = sqliteTable(
+	"project_folders",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		parentId: integer("parent_id"),
+		name: text("name").notNull(),
+		createdAt: createdAt(),
+	},
+	(table) => [index("project_folders_project_idx").on(table.projectId)],
+);
+
+// A file is its versions. One linked from the Files library has none of its own.
+export const projectFiles = sqliteTable(
+	"project_files",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		folderId: integer("folder_id").references(() => projectFolders.id, { onDelete: "set null" }),
+		orgFileId: integer("org_file_id").references(() => orgFiles.id, { onDelete: "cascade" }),
+		currentVersion: integer("current_version").notNull().default(1),
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [index("project_files_project_idx").on(table.projectId)],
+);
+
+export const projectFileVersions = sqliteTable(
+	"project_file_versions",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		fileId: integer("file_id")
+			.notNull()
+			.references(() => projectFiles.id, { onDelete: "cascade" }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		version: integer("version").notNull(),
+		name: text("name").notNull(),
+		mimeType: text("mime_type").notNull(),
+		sizeBytes: integer("size_bytes").notNull(),
+		storageKey: text("storage_key").notNull(),
+		note: text("note"),
+		// A restored version shares the older one's stored file, so it isn't counted twice.
+		restoredFrom: integer("restored_from"),
+		uploadedBy: text("uploaded_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		uniqueIndex("project_file_versions_unique_idx").on(table.fileId, table.version),
+		index("project_file_versions_project_idx").on(table.projectId),
+		index("project_file_versions_org_idx").on(table.organizationId),
+	],
+);
+
+export const projectReports = sqliteTable(
+	"project_reports",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		type: text("type", { enum: ["form", "file"] }).notNull().default("form"),
+		// A month (2026-09) or quarter (2026-Q3) for a form. An uploaded report has a label.
+		period: text("period").notNull(),
+		label: text("label"),
+		status: text("status", { enum: ["draft", "submitted", "needs_revision", "approved", "locked"] })
+			.notNull()
+			.default("draft"),
+		revision: integer("revision").notNull().default(1),
+		beneficiaries: integer("beneficiaries"),
+		activities: text("activities"),
+		budgetSpent: real("budget_spent"),
+		challenges: text("challenges"),
+		nextPlan: text("next_plan"),
+		fileId: integer("file_id").references(() => projectFiles.id, { onDelete: "set null" }),
+		reviewComment: text("review_comment"),
+		reviewedBy: text("reviewed_by").references(() => user.id, { onDelete: "set null" }),
+		reviewedAt: integer("reviewed_at", { mode: "timestamp_ms" }),
+		submittedAt: integer("submitted_at", { mode: "timestamp_ms" }),
+		submittedBy: text("submitted_by").references(() => user.id, { onDelete: "set null" }),
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [index("project_reports_project_idx").on(table.projectId)],
+);
+
+export const projectReportFiles = sqliteTable(
+	"project_report_files",
+	{
+		reportId: integer("report_id")
+			.notNull()
+			.references(() => projectReports.id, { onDelete: "cascade" }),
+		fileId: integer("file_id")
+			.notNull()
+			.references(() => projectFiles.id, { onDelete: "cascade" }),
+	},
+	(table) => [primaryKey({ columns: [table.reportId, table.fileId] })],
+);
+
+// A published number and where it came from. It stays as checked, even when a newer
+// version of the file arrives, until someone publishes again.
+export const projectWidgets = sqliteTable(
+	"project_widgets",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		projectId: integer("project_id")
+			.notNull()
+			.references(() => projects.id, { onDelete: "cascade" }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		fileId: integer("file_id").references(() => projectFiles.id, { onDelete: "set null" }),
+		fileVersion: integer("file_version").notNull(),
+		fileName: text("file_name").notNull(),
+		kind: text("kind", { enum: ["kpi_total", "bar", "line", "donut", "kpi_growth"] }).notNull(),
+		title: text("title").notNull(),
+		series: text("series").notNull(),
+		checkedBy: text("checked_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+	},
+	(table) => [index("project_widgets_project_idx").on(table.projectId)],
+);
+
+// Skills an organization recognizes, each with its own rubric for the five levels.
+export const capacitySkills = sqliteTable(
+	"capacity_skills",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		category: text("category"),
+		description: text("description"),
+		revalidateMonths: integer("revalidate_months"),
+		rubric: text("rubric").notNull(),
+		rubricVersion: integer("rubric_version").notNull().default(1),
+		retired: integer("retired", { mode: "boolean" }).notNull().default(false),
+		createdAt: createdAt(),
+	},
+	(table) => [index("capacity_skills_org_idx").on(table.organizationId)],
+);
+
+// Level is only ever set by an assessor. A nomination waits in pendingLevel.
+export const capacityUserSkills = sqliteTable(
+	"capacity_user_skills",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		skillId: integer("skill_id")
+			.notNull()
+			.references(() => capacitySkills.id, { onDelete: "cascade" }),
+		level: integer("level"),
+		pendingLevel: integer("pending_level"),
+		evidence: text("evidence"),
+		nominatedAt: integer("nominated_at", { mode: "timestamp_ms" }),
+		feedback: text("feedback"),
+		privateNote: text("private_note"),
+		assessedBy: text("assessed_by").references(() => user.id, { onDelete: "set null" }),
+		assessedAt: integer("assessed_at", { mode: "timestamp_ms" }),
+		rubricVersion: integer("rubric_version"),
+		shared: integer("shared", { mode: "boolean" }).notNull().default(false),
+	},
+	(table) => [
+		uniqueIndex("capacity_user_skills_unique_idx").on(table.userId, table.skillId),
+		index("capacity_user_skills_org_idx").on(table.organizationId),
+	],
+);
+
+export const capacityBadgeShares = sqliteTable(
+	"capacity_badge_shares",
+	{
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		badgeKey: text("badge_key").notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.organizationId, table.userId, table.badgeKey] })],
+);
+
+// Nobody is in the directory unless they've turned this on themselves.
+export const directoryProfiles = sqliteTable(
+	"directory_profiles",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		listed: integer("listed", { mode: "boolean" }).notNull().default(false),
+		displayName: text("display_name"),
+		displayNameApproved: integer("display_name_approved", { mode: "boolean" }).notNull().default(false),
+		picture: text("picture", { enum: ["photo", "initials", "pattern"] }).notNull().default("initials"),
+		showTitle: integer("show_title", { mode: "boolean" }).notNull().default(true),
+		showTeam: integer("show_team", { mode: "boolean" }).notNull().default(false),
+		bio: text("bio"),
+	},
+	(table) => [uniqueIndex("directory_profiles_unique_idx").on(table.organizationId, table.userId)],
+);
+
+export const directorySettings = sqliteTable("directory_settings", {
+	organizationId: integer("organization_id")
+		.primaryKey()
+		.references(() => organizations.id, { onDelete: "cascade" }),
+	showTeams: integer("show_teams", { mode: "boolean" }).notNull().default(false),
+	allowPhotos: integer("allow_photos", { mode: "boolean" }).notNull().default(false),
+	allowDisplayNames: integer("allow_display_names", { mode: "boolean" }).notNull().default(true),
+});

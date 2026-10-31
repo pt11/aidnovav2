@@ -342,16 +342,17 @@ export function QuizBuilderPage({ id }: { id: string }) {
 	};
 	const current = data.questions.find((question) => question.id === editing) ?? null;
 	return (
-		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
-			<div className="flex items-center gap-3">
+		<div className="flex min-h-full flex-col">
+			<header className="flex flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-2.5 md:px-6">
 				<Link href={`/courses/${id}/manage`} aria-label={t("course.back_to_course")} className="grid size-8 shrink-0 place-items-center rounded-md border border-border text-foreground">
 					<ChevronLeft size={16} aria-hidden="true" />
 				</Link>
-				<div className="min-w-0">
+				<div className="min-w-0 flex-[1_1_260px]">
 					<p className="break-words text-xs text-muted-foreground">{data.courseTitle}</p>
-					<h1 className="text-[22px] font-semibold">{t("course.final_quiz")}</h1>
+					<h1 className="text-base font-semibold">{t("course.final_quiz")}</h1>
 				</div>
-			</div>
+			</header>
+			<div className="mx-auto flex w-full max-w-[1180px] flex-col gap-4 p-4 md:p-6">
 			<div className="flex flex-wrap items-start gap-4">
 				<div className="flex min-w-0 flex-[1_1_280px] flex-col gap-4 lg:max-w-[360px]">
 					<QuizSettings key={`${data.quizTitle}-${data.passingScore}`} courseId={id} data={data} />
@@ -415,6 +416,7 @@ export function QuizBuilderPage({ id }: { id: string }) {
 					)}
 				</div>
 			</div>
+		</div>
 		</div>
 	);
 }

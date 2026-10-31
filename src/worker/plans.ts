@@ -1,4 +1,4 @@
-import { and, count, eq, gt, isNotNull, sql, sum } from "drizzle-orm";
+import { and, count, eq, gt, isNotNull, isNull, sql, sum } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Db } from "./db";
 import {
@@ -11,6 +11,9 @@ import {
 	subscriptionPlans,
 	upgradeRequests,
 	userProfiles,
+	policies,
+	projectFileVersions,
+	trainingEvidence,
 } from "./db/schema";
 import {
 	jsonError,
@@ -102,7 +105,7 @@ export async function getSeatUsage(db: Db, organizationId: number) {
 // Counts everything an organization keeps in storage, including course uploads.
 // A file chosen from the Hub has no key of its own, so it isn't counted twice.
 export async function getStorageUsed(db: Db, organizationId: number) {
-	const [[files], [materials], [covers], [logo], [photos]] = await Promise.all([
+	const [[files], [materials], [covers], [logo], [photos], [evidence], [attachments], [projectFiles]] = await Promise.all([
 		db
 			.select({ used: sum(orgFiles.sizeBytes) })
 			.from(orgFiles)
@@ -128,8 +131,20 @@ export async function getStorageUsed(db: Db, organizationId: number) {
 			.select({ used: sum(userProfiles.photoBytes) })
 			.from(userProfiles)
 			.where(eq(userProfiles.organizationId, organizationId)),
+		db
+			.select({ used: sum(trainingEvidence.sizeBytes) })
+			.from(trainingEvidence)
+			.where(eq(trainingEvidence.organizationId, organizationId)),
+		db
+			.select({ used: sum(policies.attachmentBytes) })
+			.from(policies)
+			.where(eq(policies.organizationId, organizationId)),
+		db
+			.select({ used: sum(projectFileVersions.sizeBytes) })
+			.from(projectFileVersions)
+			.where(and(eq(projectFileVersions.organizationId, organizationId), isNull(projectFileVersions.restoredFrom))),
 	]);
-	return [files, materials, covers, logo, photos].reduce(
+	return [files, materials, covers, logo, photos, evidence, attachments, projectFiles].reduce(
 		(total, row) => total + Number(row?.used ?? 0),
 		0,
 	);

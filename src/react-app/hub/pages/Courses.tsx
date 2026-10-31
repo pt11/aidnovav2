@@ -1,6 +1,6 @@
 import { useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GraduationCap, ImageIcon, Plus, Search } from "lucide-react";
+import { GraduationCap, ImageIcon, LayoutGrid, List, Plus, Search } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { api, ApiError } from "../api";
 import { useI18n } from "../i18n";
@@ -68,7 +68,7 @@ function ProgressBar({ percent, label }: { percent: number; label: string }) {
 			aria-valuemin={0}
 			aria-valuemax={100}
 			aria-label={label}
-			className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted"
+			className="mt-1 h-1.5 overflow-hidden rounded-full bg-input"
 		>
 			<div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
 		</div>
@@ -140,6 +140,35 @@ function ManageCard({ course }: { course: ManagedCourse }) {
 				</span>
 			</div>
 		</Link>
+	);
+}
+
+function CourseRow({
+	href,
+	course,
+	progress,
+	status,
+}: {
+	href: string;
+	course: CourseSummary;
+	progress: string;
+	status: string;
+}) {
+	const { t } = useI18n();
+	return (
+		<li className="border-t border-border first:border-t-0">
+			<Link href={href} className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-3 text-foreground no-underline hover:bg-muted/40">
+				<span className="min-w-0 flex-[1_1_260px]">
+					<span className="block break-words font-semibold">{course.title}</span>
+					<span className="block text-[13px] text-muted-foreground">{courseShape(course, t)}</span>
+				</span>
+				<span className="flex shrink-0 flex-wrap gap-1.5">
+					<Chip tone={course.status === "published" ? "primary" : "outline"}>{status}</Chip>
+					{course.isMandatory && <Chip tone="neutral">{t("course.mandatory_chip")}</Chip>}
+				</span>
+				<span className="w-36 shrink-0 text-[13px] text-muted-foreground">{progress}</span>
+			</Link>
+		</li>
 	);
 }
 
@@ -387,6 +416,7 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 	const [filter, setFilter] = useState<ManageFilter>("all");
 	const [search, setSearch] = useState("");
 	const [creating, setCreating] = useState(false);
+	const [view, setView] = useState<"cards" | "rows">("cards");
 
 	const managed = courses.data?.manage ?? [];
 	const learning = courses.data?.learning ?? [];
@@ -423,7 +453,8 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 						? t("course.summary", {
 								published,
 								drafts: managed.length - published,
-							})
+									enrolled: managed.reduce((total, course) => total + course.enrolled, 0),
+								})
 						: t("course.staff_subtitle")
 				}
 				action={
@@ -460,6 +491,28 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 							/>
 						)}
 						<SearchField label={t("course.search")} value={search} onChange={setSearch} className="min-w-52 flex-1" />
+						<div role="group" aria-label={t("course.view")} className="inline-flex rounded-md border border-border bg-muted p-[3px]">
+							{(
+								[
+									["cards", LayoutGrid, "course.view_cards"],
+									["rows", List, "course.view_rows"],
+								] as const
+							).map(([value, Icon, key]) => (
+								<button
+									key={value}
+									type="button"
+									aria-pressed={view === value}
+									aria-label={t(key)}
+									title={t(key)}
+									onClick={() => setView(value)}
+									className={`grid size-8 place-items-center rounded ${
+										view === value ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+									}`}
+								>
+									<Icon size={16} aria-hidden="true" />
+								</button>
+							))}
+						</div>
 					</div>
 					{showManage && managed.length === 0 && (
 						<StatePanel
@@ -493,11 +546,37 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 							}
 						/>
 					)}
-					<div className="grid grid-cols-[repeat(auto-fill,minmax(min(280px,100%),1fr))] gap-4">
-						{showManage
-							? visibleManaged.map((course) => <ManageCard key={course.id} course={course} />)
-							: visibleLearning.map((course) => <LearningCard key={course.id} course={course} />)}
-					</div>
+					{view === "cards" ? (
+						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(280px,100%),1fr))] gap-4">
+							{showManage
+								? visibleManaged.map((course) => <ManageCard key={course.id} course={course} />)
+								: visibleLearning.map((course) => <LearningCard key={course.id} course={course} />)}
+						</div>
+					) : (
+						(showManage ? visibleManaged : visibleLearning).length > 0 && (
+							<ul className="rounded-card border border-border bg-card">
+								{showManage
+									? visibleManaged.map((course) => (
+											<CourseRow
+												key={course.id}
+												href={`/courses/${course.id}/manage`}
+												course={course}
+												status={t(course.status === "published" ? "policies.published" : "policies.draft")}
+												progress={t("course.completed_of", { done: course.completed, total: course.enrolled })}
+											/>
+										))
+									: visibleLearning.map((course) => (
+											<CourseRow
+												key={course.id}
+												href={`/courses/${course.id}`}
+												course={course}
+												status={t("policies.published")}
+												progress={`${course.percent}%`}
+											/>
+										))}
+							</ul>
+						)
+					)}
 				</>
 			)}
 			{creating && <NewCourseDialog open onClose={() => setCreating(false)} />}

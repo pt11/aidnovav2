@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, Download, FileText, Plus, X } from "lucide-react";
 import { Link } from "wouter";
@@ -33,6 +33,13 @@ export interface PolicyDraft {
 	effectiveDate: string | null;
 	reviewDate: string | null;
 	departments: { id: number; name: string }[];
+	attachment?: {
+		type: "file" | "link";
+		name: string;
+		url: string | null;
+		mimeType: string | null;
+		sizeBytes: number | null;
+	} | null;
 }
 
 interface PolicySummary {
@@ -131,7 +138,7 @@ function PolicyCard({ policy }: { policy: PolicySummary }) {
 									aria-valuemin={0}
 									aria-valuemax={100}
 									aria-label={t("policies.tab_compliance")}
-									className="h-1.5 max-w-48 flex-1 overflow-hidden rounded-full bg-muted"
+									className="h-1.5 max-w-48 flex-1 overflow-hidden rounded-full bg-input"
 								>
 									<span
 										className="block h-full rounded-full bg-primary"
@@ -175,7 +182,7 @@ function AckBar({ done, total, label }: { done: number; total: number; label: st
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-label={label}
-				className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+				className="h-1.5 flex-1 overflow-hidden rounded-full bg-input"
 			>
 				<span className="block h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
 			</span>
@@ -238,11 +245,30 @@ function PolicyPanel({ policy, onClose }: { policy: PolicySummary; onClose: () =
 	const done = people.length - pending.length;
 	const percent = people.length ? Math.round((done / people.length) * 100) : 0;
 	const category = t(CATEGORY_KEYS[policy.category] ?? "policies.cat_general");
+	const closeButton = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		closeButton.current?.focus();
+	}, []);
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && !document.querySelector("dialog[open]")) onClose();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [onClose]);
 	return (
-		<aside
-			aria-label={policy.title}
-			className="hidden w-[320px] shrink-0 flex-col gap-4 rounded-card border border-border bg-card p-5 xl:flex"
-		>
+		<>
+			{/* There's only room beside the table on wide screens, so it slides over otherwise. */}
+			<button
+				type="button"
+				aria-label={t("common.close")}
+				onClick={onClose}
+				className="fixed inset-0 z-40 bg-black/30 xl:hidden"
+			/>
+			<aside
+				aria-label={policy.title}
+				className="fixed inset-y-0 right-0 z-50 flex w-[min(380px,100%)] flex-col gap-4 overflow-y-auto border-l border-border bg-card p-5 shadow-lg xl:static xl:z-auto xl:w-[320px] xl:shrink-0 xl:overflow-visible xl:rounded-card xl:border xl:shadow-none"
+			>
 			<div className="flex items-start gap-2">
 				<div className="min-w-0 flex-1">
 					<p className="text-xs text-muted-foreground">
@@ -253,6 +279,7 @@ function PolicyPanel({ policy, onClose }: { policy: PolicySummary; onClose: () =
 				<button
 					type="button"
 					aria-label={t("common.close")}
+					ref={closeButton}
 					className="grid size-8 shrink-0 place-items-center rounded-md bg-muted"
 					onClick={onClose}
 				>
@@ -367,7 +394,8 @@ function PolicyPanel({ policy, onClose }: { policy: PolicySummary; onClose: () =
 					</div>
 				</dl>
 			</div>
-		</aside>
+			</aside>
+		</>
 	);
 }
 
