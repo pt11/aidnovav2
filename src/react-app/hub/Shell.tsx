@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	Award,
 	BarChart3,
 	Bell,
 	CalendarDays,
@@ -10,6 +11,7 @@ import {
 	Search,
 	Sparkles,
 	FileText,
+	FolderKanban,
 	FolderOpen,
 	GraduationCap,
 	LayoutDashboard,
@@ -51,6 +53,16 @@ const CORE_ITEMS: NavItem[] = [
 	{ url: "/files", icon: FolderOpen, labelKey: "nav.files" },
 	{ url: "/calendar", icon: CalendarDays, labelKey: "nav.calendar" },
 ];
+
+// Optional modules only appear in the menu once they're on for the organization.
+const MODULE_ITEMS: { key: string; item: NavItem }[] = [
+	{ key: "projects", item: { url: "/projects", icon: FolderKanban, labelKey: "nav.projects" } },
+	{ key: "capacity_building", item: { url: "/capacity", icon: Award, labelKey: "nav.capacity" } },
+];
+
+function moduleItems(activeModules: string[]) {
+	return MODULE_ITEMS.filter(({ key }) => activeModules.includes(key)).map(({ item }) => item);
+}
 
 const MANAGER_ITEMS: NavItem[] = [
 	{ url: "/users", icon: Users, labelKey: "nav.users" },
@@ -259,11 +271,11 @@ interface NavGroup {
 	items: NavItem[];
 }
 
-function navGroups(role: Role): NavGroup[] {
+function navGroups(role: Role, activeModules: string[]): NavGroup[] {
 	const [announcements, dashboard, hub, policies, courses, files, calendar] = CORE_ITEMS;
 	return [
 		{ labelKey: "shell.workspace", items: [dashboard, announcements, hub] },
-		{ labelKey: "shell.content", items: [policies, courses, files, calendar] },
+		{ labelKey: "shell.content", items: [...moduleItems(activeModules), policies, courses, files, calendar] },
 		canManage(role)
 			? { labelKey: "shell.manage", items: MANAGER_ITEMS }
 			: { labelKey: "shell.account", items: [PROFILE_ITEM] },
@@ -303,7 +315,7 @@ function SidebarContent({
 				aria-label={t("shell.main_nav")}
 				className="flex-1 overflow-y-auto px-3 pt-4 pb-2"
 			>
-				{navGroups(org.role).map((group, index) => (
+				{navGroups(org.role, me.activeModules).map((group, index) => (
 					<div key={group.labelKey} className={index > 0 ? "mt-3.5" : ""}>
 						<p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
 							{t(group.labelKey)}
@@ -517,7 +529,7 @@ export function Header({ onOpenMenu }: { onOpenMenu?: () => void }) {
 	);
 }
 
-function MobileBottomNav({ role }: { role: Role }) {
+function MobileBottomNav({ role, activeModules }: { role: Role; activeModules: string[] }) {
 	const { t } = useI18n();
 	const [location] = useLocation();
 	const [moreOpen, setMoreOpen] = useState(false);
@@ -534,6 +546,7 @@ function MobileBottomNav({ role }: { role: Role }) {
 	if (/^\/courses\/[^/]+\/lessons\/[^/]+/.test(location)) return null;
 
 	const moreItems = [
+		...moduleItems(activeModules),
 		CORE_ITEMS[3],
 		CORE_ITEMS[6],
 		CORE_ITEMS[5],
@@ -688,7 +701,7 @@ export function WorkspaceShell({
 				</main>
 			</div>
 
-			<MobileBottomNav role={org.role} />
+			<MobileBottomNav role={org.role} activeModules={me.activeModules} />
 		</div>
 	);
 }

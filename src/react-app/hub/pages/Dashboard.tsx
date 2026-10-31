@@ -56,6 +56,13 @@ export interface DashboardData {
 	announcements: number;
 	pendingPolicies: { id: number; title: string }[];
 	pendingCourses: { id: number; title: string }[];
+	upcoming: {
+		id: number;
+		title: string;
+		startsAt: string;
+		allDay: boolean;
+		location: string | null;
+	}[];
 	manager: ManagerData | null;
 }
 
@@ -553,6 +560,49 @@ export function DashboardPage({ me }: { me: Me }) {
 						</SectionCard>
 					</div>
 				)}
+				<div className="min-w-0 flex-[1_1_380px]">
+					<SectionCard
+						title={t("dashboard.upcoming")}
+						linkLabel={t("nav.calendar")}
+						href="/calendar"
+					>
+						{data.upcoming.length === 0 ? (
+							<p className="text-muted-foreground">{t("dashboard.upcoming_empty")}</p>
+						) : (
+							<ul className="flex flex-col gap-3">
+								{data.upcoming.map((event) => {
+									const timeZone = event.allDay ? "UTC" : undefined;
+									const starts = new Date(event.startsAt);
+									return (
+										<li key={event.id} className="flex items-center gap-3">
+											<span className="flex w-11 shrink-0 flex-col items-center rounded-md bg-muted py-1 leading-tight">
+												<span className="text-[10px] font-semibold uppercase text-muted-foreground">
+													{starts.toLocaleDateString(language, { month: "short", timeZone })}
+												</span>
+												<span className="text-base font-semibold">
+													{starts.toLocaleDateString(language, { day: "numeric", timeZone })}
+												</span>
+											</span>
+											<span className="min-w-0">
+												<span className="block break-words font-medium">{event.title}</span>
+												<span className="block break-words text-[13px] text-muted-foreground">
+													{[
+														event.allDay
+															? t("calendar.all_day")
+															: starts.toLocaleTimeString(language, { hour: "2-digit", minute: "2-digit", hour12: false }),
+														event.location,
+													]
+														.filter(Boolean)
+														.join(" · ")}
+												</span>
+											</span>
+										</li>
+									);
+								})}
+							</ul>
+						)}
+					</SectionCard>
+				</div>
 				<div className="min-w-0 flex-[1_1_380px]">
 					<SectionCard
 						title={t("dashboard.recent")}

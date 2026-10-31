@@ -205,7 +205,12 @@ function CompliancePanel({ policy }: { policy: Policy }) {
 							className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 py-3"
 						>
 							<div className="min-w-0">
-								<p className="break-words text-sm font-medium">{person.name}</p>
+								<Link
+									href={`/users/${person.userId}`}
+									className="block break-words text-sm font-medium text-foreground no-underline hover:underline"
+								>
+									{person.name}
+								</Link>
 								<p className="break-all text-xs text-muted-foreground">
 									{person.email}
 									{person.departmentName && ` · ${person.departmentName}`}

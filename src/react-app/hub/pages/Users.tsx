@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+import { Link } from "wouter";
 import {
 	api,
 	ApiError,
@@ -16,6 +17,7 @@ import {
 	BUTTON_SMALL,
 	buttonClass,
 	Chip,
+	DataTable,
 	ConfirmModal,
 	Field,
 	FilterSelect,
@@ -23,9 +25,12 @@ import {
 	PageError,
 	PageHeader,
 	PageLoading,
+	ROW_LINK,
 	SearchField,
 	SelectField,
+	TABLE_CELL,
 	TextareaField,
+	useRowLink,
 } from "../ui";
 
 interface Member {
@@ -50,6 +55,8 @@ interface Invitation {
 	departmentName: string | null;
 	expiresAt: string;
 }
+
+type PersonRef = Pick<Member, "userId" | "name" | "role" | "departmentId">;
 
 const ROLES: Role[] = ["staff", "manager", "admin"];
 const QUERY_KEY = ["members"];
@@ -360,11 +367,11 @@ function CsvImportDialog({ onClose }: { onClose: () => void }) {
 	);
 }
 
-function DepartmentDialog({
+export function DepartmentDialog({
 	people,
 	onClose,
 }: {
-	people: Member[];
+	people: PersonRef[];
 	onClose: () => void;
 }) {
 	const { t } = useI18n();
@@ -421,7 +428,7 @@ function DepartmentDialog({
 	);
 }
 
-function RoleDialog({ person, onClose }: { person: Member; onClose: () => void }) {
+export function RoleDialog({ person, onClose }: { person: PersonRef; onClose: () => void }) {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [role, setRole] = useState<Role>(person.role);
@@ -462,7 +469,7 @@ function RoleDialog({ person, onClose }: { person: Member; onClose: () => void }
 	);
 }
 
-function AssignCourseDialog({ people, onClose }: { people: Member[]; onClose: () => void }) {
+export function AssignCourseDialog({ people, onClose }: { people: PersonRef[]; onClose: () => void }) {
 	const { t } = useI18n();
 	const courses = useQuery({
 		queryKey: ["courses"],
@@ -485,7 +492,7 @@ function AssignCourseDialog({ people, onClose }: { people: Member[]; onClose: ()
 	return (
 		<Modal
 			title={t("users.assign_course")}
-			description={t("users.selected_count", { count: people.length })}
+			description={people.length === 1 ? people[0].name : t("users.selected_count", { count: people.length })}
 			open
 			onClose={onClose}
 		>
@@ -542,6 +549,7 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 	const [statusFilter, setStatusFilter] = useState("active");
 	const [page, setPage] = useState(0);
 	const [now] = useState(() => Date.now());
+	const openRow = useRowLink();
 	const departments = useDepartments();
 	const members = useQuery({
 		queryKey: QUERY_KEY,
@@ -602,7 +610,12 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 			<Avatar name={person.name} photoUrl={person.photoUrl} muted={!person.isActive} />
 			<span className="min-w-0">
 				<span className="flex flex-wrap items-center gap-1.5 font-semibold">
-					<span className="min-w-0 break-words">{person.name}</span>
+					<Link
+							href={`/users/${person.userId}`}
+							className="min-w-0 break-words text-foreground no-underline hover:underline"
+						>
+							{person.name}
+						</Link>
 					{person.userId === ownerId && <Chip tone="neutral">{t("users.owner")}</Chip>}
 					{isNew(person) && person.userId !== ownerId && <Chip>{t("users.new")}</Chip>}
 				</span>
@@ -633,6 +646,7 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 		</span>
 	);
 	const actionsFor = (person: Member) => [
+		{ label: t("people.view_profile"), href: `/users/${person.userId}` },
 		...(canEdit(person)
 			? [{ label: t("users.change_role"), onSelect: () => setChangingRole(person) }]
 			: []),
@@ -770,42 +784,43 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 				</p>
 			) : (
 				<section className="overflow-hidden rounded-card border border-border bg-card">
-					<div className="hidden overflow-x-auto md:block">
-						<table className="w-full min-w-[820px] text-left">
-							<thead className="bg-background text-xs text-muted-foreground">
-								<tr>
-									<th scope="col" className="w-10 py-2.5 pl-4">
-										<input
-											type="checkbox"
-											aria-label={t("users.select_all")}
-											className="size-4 accent-primary"
-											checked={allShownSelected}
-											onChange={(event) =>
-												setSelected((current) =>
-													event.target.checked
-														? [...new Set([...current, ...shown.map((person) => person.userId)])]
-														: current.filter((id) => !shown.some((person) => person.userId === id)),
-												)
-											}
-										/>
-									</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("users.name")}</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("users.role")}</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("users.department")}</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("nav.policies")}</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("users.learning_col")}</th>
-									<th scope="col" className="px-2 py-2.5 font-semibold">{t("users.status")}</th>
-									<th scope="col" className="w-12 py-2.5 pr-3">
-										<span className="sr-only">{t("course.actions")}</span>
-									</th>
-								</tr>
-							</thead>
-							<tbody>
+					<div className="hidden md:block">
+							<DataTable
+								bare
+								minWidth={820}
+								head={[
+									<input
+										key="all"
+										type="checkbox"
+										aria-label={t("users.select_all")}
+										className="size-4 accent-primary"
+										checked={allShownSelected}
+										onChange={(event) =>
+											setSelected((current) =>
+												event.target.checked
+													? [...new Set([...current, ...shown.map((person) => person.userId)])]
+													: current.filter((id) => !shown.some((person) => person.userId === id)),
+											)
+										}
+									/>,
+									t("users.name"),
+									t("users.role"),
+									t("users.department"),
+									t("nav.policies"),
+									t("users.learning_col"),
+									t("users.status"),
+									<span key="actions" className="sr-only">{t("course.actions")}</span>,
+								]}
+							>
 								{shown.map((person) => {
 									const isSelected = selected.includes(person.userId);
 									return (
-										<tr key={person.userId} className={`border-t border-border ${isSelected ? "bg-background" : ""}`}>
-											<td className="py-3 pl-4">
+										<tr
+											key={person.userId}
+											className={`${ROW_LINK} ${isSelected ? "bg-background" : ""}`}
+											onClick={openRow(`/users/${person.userId}`)}
+										>
+											<td data-no-row-link className={`${TABLE_CELL} w-10`}>
 												<input
 													type="checkbox"
 													aria-label={t("users.select_person", { name: person.name })}
@@ -814,24 +829,27 @@ export function UsersPage({ me, role }: { me: Me; role: Role }) {
 													onChange={(event) => toggle(person.userId, event.target.checked)}
 												/>
 											</td>
-											<td className="px-2 py-3">{personCell(person)}</td>
-											<td className="px-2 py-3"><Chip tone={roleTone[person.role]}>{t(`role.${person.role}`)}</Chip></td>
-											<td className="px-2 py-3">{departmentCell(person)}</td>
-											<td className="px-2 py-3">{policiesCell(person)}</td>
-											<td className="px-2 py-3">{learningCell(person)}</td>
-											<td className="px-2 py-3">{statusCell(person)}</td>
-											<td className="py-3 pr-3">
+											<td className={TABLE_CELL}>{personCell(person)}</td>
+											<td className={TABLE_CELL}><Chip tone={roleTone[person.role]}>{t(`role.${person.role}`)}</Chip></td>
+											<td className={TABLE_CELL}>{departmentCell(person)}</td>
+											<td className={TABLE_CELL}>{policiesCell(person)}</td>
+											<td className={TABLE_CELL}>{learningCell(person)}</td>
+											<td className={TABLE_CELL}>{statusCell(person)}</td>
+											<td data-no-row-link className={`${TABLE_CELL} w-12`}>
 												<ActionsMenu label={t("users.actions_for", { name: person.name })} actions={actionsFor(person)} />
 											</td>
 										</tr>
 									);
 								})}
-							</tbody>
-						</table>
-					</div>
-					<ul className="divide-y divide-border md:hidden">
+							</DataTable>
+						</div>
+						<ul className="divide-y divide-border md:hidden">
 						{shown.map((person) => (
-							<li key={person.userId} className="p-4">
+							<li
+								key={person.userId}
+								className={`${ROW_LINK} p-4 hover:bg-muted/50`}
+								onClick={openRow(`/users/${person.userId}`)}
+							>
 								<div className="flex items-start gap-2">
 									<input
 										type="checkbox"

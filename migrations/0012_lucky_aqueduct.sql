@@ -1,0 +1,1 @@
+ALTER TABLE `organizations` ADD `activity_report_access` text DEFAULT 'managers' NOT NULL;

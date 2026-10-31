@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { Check, CircleAlert, MoreHorizontal, Search, type LucideIcon } from "lucide-react";
+import { useLocation } from "wouter";
 import { useI18n } from "./i18n";
 
 export const LOGO = "/aidnova-logo.png";
@@ -36,6 +37,7 @@ const CHIP_TONES = {
 	success: "bg-[#14795A] text-white",
 	neutral: "bg-muted text-foreground",
 	outline: "border border-input bg-card text-foreground",
+	warning: "border border-[#F59F0A] bg-[#FEF6E7] text-[#030711] dark:bg-[#F59F0A]/15 dark:text-foreground",
 };
 
 // The one label chip, for priorities, statuses and roles.
@@ -630,6 +632,58 @@ export function PasswordField({
 	);
 }
 
+export const TABLE_CELL = "px-3 py-2.5 first:pl-4 last:pr-4";
+export const ROW_LINK = "cursor-pointer";
+
+// The one data table. `bare` leaves out the card, for a table sharing one with a footer.
+export function DataTable({
+	minWidth = 640,
+	head,
+	bare = false,
+	children,
+}: {
+	minWidth?: number;
+	head: ReactNode[];
+	bare?: boolean;
+	children: ReactNode;
+}) {
+	return (
+		<div className={`overflow-x-auto ${bare ? "" : "rounded-card border border-border bg-card"}`}>
+			<table className="w-full text-left text-[13px]" style={{ minWidth }}>
+				<thead className="bg-background text-xs text-muted-foreground">
+					<tr>
+						{head.map((title, index) => (
+							<th key={index} scope="col" className="px-3 py-2.5 font-semibold first:pl-4 last:pr-4">
+								{title}
+							</th>
+						))}
+					</tr>
+				</thead>
+				<tbody className="[&>tr]:border-t [&>tr]:border-border [&>tr]:transition-colors [&>tr:hover]:bg-muted/50">
+					{children}
+				</tbody>
+			</table>
+		</div>
+	);
+}
+
+// Makes a whole row or card open a page. The name inside it stays a real link for
+// keyboards and screen readers. Mark a cell data-no-row-link to keep misclicks
+// around a checkbox or menu from navigating away.
+export function useRowLink() {
+	const [, navigate] = useLocation();
+	return (href: string) => (event: MouseEvent) => {
+		const target = event.target as Element;
+		if (target.closest("a, button, input, select, textarea, label, [role=menu], [data-no-row-link]")) return;
+		if (window.getSelection()?.toString()) return;
+		if (event.metaKey || event.ctrlKey) {
+			window.open(href, "_blank", "noopener");
+			return;
+		}
+		navigate(href);
+	};
+}
+
 export interface MenuAction {
 	label: string;
 	onSelect?: () => void;
@@ -645,11 +699,13 @@ export function ActionsMenu({
 	actions,
 	triggerLabel,
 	triggerIcon,
+	triggerClass,
 }: {
 	label: string;
 	actions: MenuAction[];
 	triggerLabel?: string;
 	triggerIcon?: ReactNode;
+	triggerClass?: string;
 }) {
 	const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
 	const trigger = useRef<HTMLButtonElement>(null);
@@ -696,7 +752,7 @@ export function ActionsMenu({
 				aria-label={triggerLabel ? undefined : label}
 				aria-haspopup="menu"
 				aria-expanded={open}
-				className={triggerLabel ? buttonClass() : "grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"}
+				className={triggerClass ?? (triggerLabel ? buttonClass() : "grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground")}
 				onClick={() => {
 					if (open) {
 						setPosition(null);

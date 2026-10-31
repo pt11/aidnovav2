@@ -1,5 +1,6 @@
 import { and, asc, count, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 import type { Db } from "./db";
 import {
 	announcements,
@@ -16,6 +17,7 @@ import {
 	userProfiles,
 } from "./db/schema";
 import { memberPhotoUrl } from "./media";
+import { organizations } from "./db/schema";
 import {
 	jsonError,
 	requireOrg,
@@ -175,6 +177,22 @@ async function courseRows(db: Db, organizationId: number, people: Person[]) {
 export const reportRoutes = new Hono<AppEnv>();
 
 const requireManager = requireRole("manager", "admin");
+
+// An organization can keep person-by-person activity to its admins.
+const requirePeopleAccess = createMiddleware<AppEnv>(async (c, next) => {
+	const org = c.get("org");
+	if (org.role !== "admin") {
+		const [row] = await c
+			.get("db")
+			.select({ access: organizations.activityReportAccess })
+			.from(organizations)
+			.where(eq(organizations.id, org.organizationId));
+		if (row?.access === "admins") {
+			return jsonError(c, 403, "ACTIVITY_ADMINS_ONLY", "Only admins can see this in your organization.");
+		}
+	}
+	await next();
+});
 
 reportRoutes.post("/announcements/views", requireUser, requireOrg, async (c) => {
 	const db = c.get("db");
@@ -376,7 +394,7 @@ reportRoutes.get("/reports/policies", requireUser, requireOrg, requireManager, a
 	});
 });
 
-reportRoutes.get("/reports/policies/:id/people", requireUser, requireOrg, requireManager, async (c) => {
+reportRoutes.get("/reports/policies/:id/people", requireUser, requireOrg, requireManager, requirePeopleAccess, async (c) => {
 	const db = c.get("db");
 	const organizationId = c.get("org").organizationId;
 	const id = Number(c.req.param("id"));
@@ -468,7 +486,7 @@ reportRoutes.get("/reports/announcements", requireUser, requireOrg, requireManag
 	});
 });
 
-reportRoutes.get("/reports/announcements/:id/people", requireUser, requireOrg, requireManager, async (c) => {
+reportRoutes.get("/reports/announcements/:id/people", requireUser, requireOrg, requireManager, requirePeopleAccess, async (c) => {
 	const db = c.get("db");
 	const organizationId = c.get("org").organizationId;
 	const id = Number(c.req.param("id"));
@@ -550,7 +568,7 @@ reportRoutes.get("/reports/files", requireUser, requireOrg, requireManager, asyn
 	});
 });
 
-reportRoutes.get("/reports/files/:id/people", requireUser, requireOrg, requireManager, async (c) => {
+reportRoutes.get("/reports/files/:id/people", requireUser, requireOrg, requireManager, requirePeopleAccess, async (c) => {
 	const db = c.get("db");
 	const organizationId = c.get("org").organizationId;
 	const id = Number(c.req.param("id"));

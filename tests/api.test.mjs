@@ -2309,3 +2309,320 @@ describe("reports and activity", () => {
 		assert.equal(none.members, 3);
 	});
 });
+
+describe("calendar", () => {
+	let admin, manager, staff, outsider;
+	const event = (overrides = {}) => ({
+		title: "First aid",
+		type: "training",
+		startsAt: "2031-03-12T09:00:00.000Z",
+		endsAt: "2031-03-12T11:00:00.000Z",
+		allDay: false,
+		location: "Room 2",
+		meetingUrl: "https://meet.example.org/abc",
+		details: "Bring a notebook",
+		...overrides,
+	});
+	const range = `from=${Date.UTC(2031, 2, 1)}&to=${Date.UTC(2031, 3, 1)}`;
+	const list = async (client) => (await client.request(`/api/events?${range}`)).data;
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("caladmin");
+		manager = await new Client().signUpAndIn("calmanager");
+		staff = await new Client().signUpAndIn("calstaff");
+		outsider = await new Client().signUpAndIn("calout");
+		const orgId = (await admin.createOrg("chi")).data.id;
+		await outsider.createOrg("psi");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+	});
+
+	test("managers manage events, everyone in the organization sees them", async () => {
+		const made = await manager.request("/api/events", { method: "POST", body: event() });
+		assert.equal(made.status, 201);
+		assert.equal((await staff.request("/api/events", { method: "POST", body: event() })).status, 403);
+		assert.equal((await list(staff)).events.some((item) => item.id === made.data.id), true);
+		assert.equal((await list(outsider)).events.length, 0);
+		assert.equal((await new Client().request(`/api/events?${range}`)).status, 401);
+
+		const path = `/api/events/${made.data.id}`;
+		assert.equal((await staff.request(path, { method: "PATCH", body: event() })).status, 403);
+		assert.equal((await outsider.request(path, { method: "PATCH", body: event() })).status, 404);
+		assert.equal((await admin.request(path, { method: "PATCH", body: event({ title: "Renamed" }) })).status, 200);
+		assert.equal((await list(staff)).events.find((item) => item.id === made.data.id).title, "Renamed");
+		assert.equal((await staff.request(path, { method: "DELETE" })).status, 403);
+		assert.equal((await outsider.request(path, { method: "DELETE" })).status, 404);
+		assert.equal((await admin.request(path, { method: "DELETE" })).status, 200);
+		assert.equal((await list(staff)).events.some((item) => item.id === made.data.id), false);
+	});
+
+	test("bad events are refused", async () => {
+		const send = (body) => admin.request("/api/events", { method: "POST", body });
+		assert.equal((await send(event({ endsAt: "2031-03-12T08:00:00.000Z" }))).data.code, "END_BEFORE_START");
+		assert.equal((await send(event({ meetingUrl: "javascript:alert(1)" }))).data.code, "INVALID_LINK");
+		assert.equal((await send(event({ meetingUrl: "http://plain.example.org" }))).data.code, "INVALID_LINK");
+		assert.equal((await send(event({ title: "" }))).data.code, "INVALID_EVENT");
+		assert.equal((await send(event({ type: "party" }))).data.code, "INVALID_EVENT");
+		assert.equal((await admin.request("/api/events?from=5&to=1")).status, 400);
+		assert.equal((await admin.request(`/api/events?from=0&to=${Date.UTC(2031, 0, 1)}`)).status, 400);
+	});
+
+	test("events spanning the month are found, and policy reviews show only for managers", async () => {
+		const long = await admin.request("/api/events", {
+			method: "POST",
+			body: event({ title: "Spanning", startsAt: "2031-02-20T00:00:00.000Z", endsAt: "2031-03-02T00:00:00.000Z", allDay: true, meetingUrl: "" }),
+		});
+		assert.ok((await list(staff)).events.some((item) => item.id === long.data.id));
+		await admin.request("/api/policies", {
+			method: "POST",
+			body: { title: "Reviewed", category: "General", content: "x", isMandatory: false, status: "published", effectiveDate: null, reviewDate: "2031-03-15", departmentIds: [] },
+		});
+		assert.ok((await list(manager)).policyReviews.some((item) => item.title === "Reviewed"));
+		assert.deepEqual((await list(staff)).policyReviews, []);
+	});
+
+	test("the dashboard shows what's coming up", async () => {
+		const { data } = await staff.request("/api/dashboard");
+		assert.ok(data.upcoming.length >= 1);
+		assert.ok(data.upcoming.length <= 3);
+	});
+});
+
+describe("staff profiles", () => {
+	let admin, manager, staff, other, outsider;
+	const path = (id) => `/api/organizations/current/members/${id}/profile`;
+	const employment = (id) => `/api/organizations/current/members/${id}/employment`;
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("profadmin");
+		manager = await new Client().signUpAndIn("profmanager");
+		staff = await new Client().signUpAndIn("profstaff");
+		other = await new Client().signUpAndIn("profother");
+		outsider = await new Client().signUpAndIn("profout");
+		const orgId = (await admin.createOrg("omega")).data.id;
+		await outsider.createOrg("theta2");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+	});
+
+	test("only managers in the organization can open a profile", async () => {
+		assert.equal((await admin.request(path(staff.userId))).status, 200);
+		assert.equal((await manager.request(path(staff.userId))).status, 200);
+		assert.equal((await other.request(path(staff.userId))).status, 403);
+		assert.equal((await staff.request(path(staff.userId))).status, 403);
+		assert.equal((await outsider.request(path(staff.userId))).status, 404);
+		assert.equal((await new Client().request(path(staff.userId))).status, 401);
+		assert.equal((await admin.request(path("nobody"))).status, 404);
+	});
+
+	test("the profile shows policies, courses and certificates, with no storage keys", async () => {
+		const { data: policy } = await admin.request("/api/policies", { method: "POST", body: { title: "Prof Policy", category: "General", content: "x", isMandatory: true, status: "published", effectiveDate: null, reviewDate: null, departmentIds: [] } });
+		await staff.request(`/api/policies/${policy.id}/acknowledge`, { method: "POST", body: { version: 1 } });
+		const { data: course } = await admin.request("/api/courses", { method: "POST", body: { title: "Prof Course", isMandatory: true } });
+		const { data: module } = await admin.request(`/api/courses/${course.id}/modules`, { method: "POST", body: { title: "M" } });
+		const { data: lesson } = await admin.request(`/api/courses/${course.id}/modules/${module.id}/lessons`, { method: "POST", body: { title: "L" } });
+		await admin.request(`/api/courses/${course.id}/lessons/${lesson.id}`, { method: "PATCH", body: { title: "L", content: "x", videoUrl: "", completionMethod: "mark", estimatedTime: "", isRequired: true } });
+		await admin.request(`/api/courses/${course.id}`, { method: "PATCH", body: { status: "published" } });
+		await staff.request(`/api/courses/${course.id}/lessons/${lesson.id}/complete`, { method: "POST" });
+		const { data } = await manager.request(path(staff.userId));
+		assert.ok(data.policies.find((item) => item.id === policy.id).acknowledgedAt);
+		const row = data.courses.find((item) => item.id === course.id);
+		assert.deepEqual([row.status, row.lessonsDone, row.lessonTotal], ["completed", 1, 1]);
+		assert.equal(data.certificates[0].courseTitle, "Prof Course");
+		assert.ok(!JSON.stringify(data).includes("photoKey"));
+		const elsewhere = (await manager.request(path(other.userId))).data;
+		assert.equal(elsewhere.policies.find((item) => item.id === policy.id).acknowledgedAt, null);
+		assert.equal(elsewhere.certificates.length, 0);
+	});
+
+	test("employment details follow the same rules as roles", async () => {
+		const body = { position: "Field Officer", interviewDate: "2026-01-02", onboardingDate: "2026-02-03" };
+		const send = (client, id, payload = body) => client.request(employment(id), { method: "PATCH", body: payload });
+		assert.equal((await send(manager, staff.userId)).status, 200);
+		assert.equal((await manager.request(path(staff.userId))).data.position, "Field Officer");
+		assert.equal((await send(manager, admin.userId)).status, 403);
+		assert.equal((await send(admin, manager.userId)).status, 200);
+		assert.equal((await send(staff, other.userId)).status, 403);
+		assert.equal((await send(outsider, staff.userId)).status, 404);
+		assert.equal((await send(admin, staff.userId, { ...body, onboardingDate: "soon" })).status, 400);
+		assert.equal((await send(admin, staff.userId, { position: "", interviewDate: null, onboardingDate: null })).status, 200);
+		assert.equal((await manager.request(path(staff.userId))).data.onboardingDate, null);
+	});
+});
+
+describe("modules", () => {
+	let platform, admin, manager, staff, outsider, orgId, basicId, plusId;
+	const current = "/api/organizations/current/modules";
+	const state = async (client, key) => (await client.request(current)).data.modules.find((item) => item.key === key);
+	const act = (client, key, action) => client.request(`${current}/${key}/${action}`, { method: "POST" });
+	const release = (key, value) => platform.request(`/api/superadmin/modules/${key}`, { method: "PATCH", body: { release: value } });
+	const pause = (key, paused) => platform.request(`/api/superadmin/modules/${key}`, { method: "PATCH", body: { paused } });
+	const setPlan = (planId) => platform.request(`/api/superadmin/organizations/${orgId}`, { method: "PATCH", body: { planId, status: "active" } });
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("modplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("modadmin");
+		manager = await new Client().signUpAndIn("modmanager");
+		staff = await new Client().signUpAndIn("modstaff");
+		outsider = await new Client().signUpAndIn("modout");
+		orgId = (await admin.createOrg("mod")).data.id;
+		await outsider.createOrg("modo");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		const { data } = await platform.request("/api/superadmin/plans");
+		basicId = data.plans.find((p) => p.name === "Basic").id;
+		plusId = data.plans.find((p) => p.name === "Plus").id;
+		await release("projects", "coming_soon");
+		await release("capacity_building", "coming_soon");
+		await pause("projects", false);
+	});
+
+	test("the plan table starts as designed", async () => {
+		const { data } = await platform.request("/api/superadmin/modules");
+		const has = (id, key) => data.plans.find((plan) => plan.id === id).modules.includes(key);
+		assert.equal(has(basicId, "projects"), true);
+		assert.equal(has(basicId, "capacity_building"), false);
+		assert.equal(has(plusId, "projects"), true);
+		assert.equal(has(plusId, "capacity_building"), true);
+		assert.equal(has(plusId, "people_directory"), true);
+		assert.equal(data.modules.find((item) => item.key === "capacity_building").needsReview, true);
+	});
+
+	test("a module that isn't released can't be turned on", async () => {
+		const row = await state(admin, "projects");
+		assert.deepEqual([row.release, row.entitled, row.active], ["coming_soon", false, false]);
+		assert.equal((await act(admin, "projects", "enable")).data.code, "NOT_ENTITLED");
+		assert.deepEqual((await admin.request("/api/me")).data.activeModules, []);
+	});
+
+	test("only admins switch modules, and trials include everything released", async () => {
+		await release("projects", "available");
+		assert.equal((await state(admin, "projects")).source, "trial");
+		assert.equal((await act(staff, "projects", "enable")).status, 403);
+		assert.equal((await act(manager, "projects", "enable")).status, 403);
+		assert.equal((await new Client().request(`${current}/projects/enable`, { method: "POST" })).status, 401);
+		assert.equal((await staff.request(current)).status, 403);
+		assert.equal((await manager.request(current)).status, 200);
+		assert.equal((await act(admin, "nonsense", "enable")).status, 404);
+		assert.equal((await act(admin, "projects", "enable")).status, 200);
+		assert.equal((await act(admin, "projects", "enable")).status, 200);
+		assert.deepEqual((await staff.request("/api/me")).data.activeModules, ["projects"]);
+		assert.deepEqual((await outsider.request("/api/me")).data.activeModules, []);
+		assert.equal((await act(admin, "projects", "disable")).status, 200);
+		assert.deepEqual((await staff.request("/api/me")).data.activeModules, []);
+	});
+
+	test("a required safety review comes before switching on", async () => {
+		await release("capacity_building", "pilot");
+		assert.equal((await act(admin, "capacity_building", "enable")).data.code, "NEEDS_REVIEW");
+		const review = (client, body) => client.request(`${current}/capacity_building/review`, { method: "POST", body });
+		assert.equal((await review(staff, { date: "2026-10-02", note: "x" })).status, 403);
+		assert.equal((await review(admin, { date: "2026-10-02", note: "" })).status, 400);
+		assert.equal((await review(admin, { date: "2099-01-01", note: "Future" })).status, 400);
+		assert.equal((await admin.request(`${current}/projects/review`, { method: "POST", body: { date: "2026-10-02", note: "x" } })).status, 404);
+		assert.equal((await review(admin, { date: "2026-10-02", note: "With local staff" })).status, 200);
+		assert.equal((await act(admin, "capacity_building", "enable")).status, 200);
+		assert.ok((await staff.request("/api/me")).data.activeModules.includes("capacity_building"));
+		assert.equal((await act(admin, "capacity_building", "disable")).status, 200);
+		assert.ok((await state(admin, "capacity_building")).reviewAt);
+	});
+
+	test("the plan decides after a trial, a grant goes beyond it, and turning off keeps the choice safe", async () => {
+		await act(admin, "projects", "enable");
+		await act(admin, "capacity_building", "enable");
+		await setPlan(basicId);
+		const keys = async () => (await admin.request("/api/me")).data.activeModules;
+		assert.deepEqual(await keys(), ["projects"]);
+		assert.equal((await state(admin, "capacity_building")).entitled, false);
+		assert.equal((await act(admin, "capacity_building", "enable")).data.code, "NOT_ENTITLED");
+		await setPlan(plusId);
+		assert.deepEqual((await keys()).sort(), ["capacity_building", "projects"]);
+
+		await setPlan(basicId);
+		const grant = await platform.request("/api/superadmin/module-overrides", { method: "POST", body: { organizationId: orgId, moduleKey: "capacity_building", until: "2099-01-01", note: "Pilot" } });
+		assert.equal(grant.status, 201);
+		assert.equal((await admin.request("/api/superadmin/module-overrides", { method: "POST", body: {} })).status, 403);
+		assert.equal((await state(admin, "capacity_building")).source, "override");
+		assert.ok((await keys()).includes("capacity_building"));
+		sql(`UPDATE module_overrides SET until = 1000 WHERE organization_id = ${orgId}`);
+		assert.ok(!(await keys()).includes("capacity_building"));
+		const { data } = await platform.request("/api/superadmin/modules");
+		const row = data.overrides.find((item) => item.organizationId === orgId);
+		assert.equal((await platform.request(`/api/superadmin/module-overrides/${row.id}`, { method: "DELETE" })).status, 200);
+	});
+
+	test("pausing stops a module everywhere, and plan changes apply straight away", async () => {
+		await setPlan(basicId);
+		await act(admin, "projects", "enable");
+		await pause("projects", true);
+		assert.deepEqual((await admin.request("/api/me")).data.activeModules, []);
+		assert.equal((await act(admin, "projects", "enable")).data.code, "NOT_ENTITLED");
+		await pause("projects", false);
+		assert.deepEqual((await admin.request("/api/me")).data.activeModules, ["projects"]);
+
+		const change = (included) => platform.request("/api/superadmin/plan-modules", { method: "POST", body: { planId: basicId, moduleKey: "projects", included } });
+		assert.equal((await admin.request("/api/superadmin/plan-modules", { method: "POST", body: {} })).status, 403);
+		assert.equal((await change(false)).status, 200);
+		assert.deepEqual((await admin.request("/api/me")).data.activeModules, []);
+		assert.equal((await change(true)).status, 200);
+		assert.deepEqual((await admin.request("/api/me")).data.activeModules, ["projects"]);
+		assert.equal((await platform.request("/api/superadmin/plan-modules", { method: "POST", body: { planId: basicId, moduleKey: "nope", included: true } })).status, 400);
+		assert.equal((await platform.request("/api/superadmin/modules/nope", { method: "PATCH", body: { paused: true } })).status, 404);
+		assert.equal((await platform.request("/api/superadmin/modules/projects", { method: "PATCH", body: { release: "nope" } })).status, 400);
+		for (const route of ["/api/superadmin/modules"]) {
+			assert.equal((await admin.request(route)).status, 403);
+			assert.equal((await new Client().request(route)).status, 401);
+		}
+		await release("projects", "coming_soon");
+		await release("capacity_building", "coming_soon");
+	});
+});
+
+describe("upcoming events", () => {
+	test("an all-day event stays on the dashboard through its last day", async () => {
+		const admin = await new Client().signUpAndIn("upcomingadmin");
+		await admin.createOrg("upcoming");
+		const today = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+		const yesterday = `${new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)}T00:00:00.000Z`;
+		const add = (title, day) =>
+			admin.request("/api/events", {
+				method: "POST",
+				body: { title, type: "holiday", allDay: true, startsAt: day, endsAt: day },
+			});
+		assert.equal((await add("Today off", today)).status, 201);
+		assert.equal((await add("Yesterday off", yesterday)).status, 201);
+		const { data } = await admin.request("/api/dashboard");
+		assert.deepEqual(data.upcoming.map((event) => event.title), ["Today off"]);
+	});
+});
+
+describe("activity report access", () => {
+	test("an admin can keep person-by-person activity from managers", async () => {
+		const admin = await new Client().signUpAndIn("accessadmin");
+		const manager = await new Client().signUpAndIn("accessmanager");
+		const orgId = (await admin.createOrg("access")).data.id;
+		addMember(manager.userId, orgId, "manager");
+		const file = await admin.request("/api/files/link", {
+			method: "POST",
+			body: { name: "Handbook", url: "https://example.org/handbook" },
+		});
+		assert.equal(file.status, 201);
+		const path = `/api/reports/files/${file.data.id}/people`;
+		const setting = "/api/organizations/current/activity-report-access";
+		assert.equal((await manager.request(path)).status, 200);
+
+		assert.equal((await admin.request(setting, { method: "PUT", body: { access: "everyone" } })).status, 400);
+		assert.equal((await manager.request(setting, { method: "PUT", body: { access: "managers" } })).status, 403);
+		assert.equal((await admin.request(setting, { method: "PUT", body: { access: "admins" } })).status, 200);
+		assert.equal((await admin.request("/api/organizations/current")).data.activityReportAccess, "admins");
+
+		const blocked = await manager.request(path);
+		assert.equal(blocked.status, 403);
+		assert.equal(blocked.data.code, "ACTIVITY_ADMINS_ONLY");
+		assert.equal((await admin.request(path)).status, 200);
+		// Totals stay available to managers.
+		assert.equal((await manager.request("/api/reports/files")).status, 200);
+	});
+});

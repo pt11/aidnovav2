@@ -55,7 +55,7 @@ function scrollIntoReach(element: HTMLElement | null) {
 	element?.scrollIntoView({ block: "nearest", inline: "center" });
 }
 
-function SettingsLayout({
+export function SettingsLayout({
 	canManage,
 	isAdmin = false,
 	title,
@@ -80,6 +80,7 @@ function SettingsLayout({
 							{ href: "/settings/departments", label: "settings.departments" },
 							...(isAdmin ? [{ href: "/settings/sign-in", label: "signin.title" }] : []),
 							{ href: "/settings/plan", label: "plan.title" },
+							...(isAdmin ? [{ href: "/settings/modules", label: "modules.title" }] : []),
 						],
 					},
 				]
@@ -171,6 +172,7 @@ interface OrgDetails {
 	phone: string | null;
 	website: string | null;
 	address: string | null;
+	activityReportAccess: "managers" | "admins";
 }
 
 const ORG_KEY = ["organization"];
@@ -721,6 +723,41 @@ export function SettingsPlanPage({ org }: { org: Membership }) {
 	);
 }
 
+function ActivityAccessSection({
+	current,
+	canEdit,
+}: {
+	current: "managers" | "admins";
+	canEdit: boolean;
+}) {
+	const { t } = useI18n();
+	const queryClient = useQueryClient();
+	const save = useMutation({
+		mutationFn: (access: string) =>
+			api("/organizations/current/activity-report-access", { method: "PUT", body: { access } }),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ORG_KEY }),
+	});
+	return (
+		<section className="flex flex-col gap-2.5 rounded-card border border-border bg-card p-5">
+			<div>
+				<h3 className="text-[15px] font-semibold">{t("settings.activity_title")}</h3>
+				<p className="text-[13px] text-muted-foreground">{t("settings.activity_desc")}</p>
+			</div>
+			{save.isError && <Alert>{t("error.generic")}</Alert>}
+			<SelectField
+				label={t("settings.activity_who")}
+				value={current}
+				disabled={!canEdit || save.isPending}
+				onChange={(event) => save.mutate(event.target.value)}
+			>
+				<option value="managers">{t("settings.activity_managers")}</option>
+				<option value="admins">{t("settings.activity_admins")}</option>
+			</SelectField>
+			<p className="text-xs text-muted-foreground">{t("settings.activity_note")}</p>
+		</section>
+	);
+}
+
 export function SettingsGeneralPage({ org }: { org: Membership }) {
 	const { t } = useI18n();
 	const details = useQuery({
@@ -740,6 +777,7 @@ export function SettingsGeneralPage({ org }: { org: Membership }) {
 			{details.data && (
 				<GeneralForm details={details.data} canEdit={org.role === "admin"} />
 			)}
+					{details.data && <ActivityAccessSection current={details.data.activityReportAccess} canEdit={org.role === "admin"} />}
 		</SettingsLayout>
 	);
 }

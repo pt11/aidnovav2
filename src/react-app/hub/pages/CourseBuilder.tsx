@@ -40,6 +40,10 @@ import {
 	SelectField,
 	StatePanel,
 	TextareaField,
+	DataTable,
+	ROW_LINK,
+	TABLE_CELL,
+	useRowLink,
 } from "../ui";
 import { COURSES_KEY, CoverPicker, uploadCover } from "./Courses";
 
@@ -1603,6 +1607,7 @@ function AssignDialog({
 
 export function CourseLearnersPage({ id }: { id: string }) {
 	const { t, language } = useI18n();
+	const openRow = useRowLink();
 	const queryClient = useQueryClient();
 	const [assigning, setAssigning] = useState(false);
 	const learners = useQuery({
@@ -1642,52 +1647,52 @@ export function CourseLearnersPage({ id }: { id: string }) {
 			{data.learners.length === 0 ? (
 				<StatePanel title={t("course.no_learners")} description={t("course.no_learners_desc")} />
 			) : (
-				<section className="overflow-x-auto rounded-card border border-border bg-card">
-					<table className="w-full min-w-[640px] text-left text-[13px]">
-						<thead className="bg-background text-xs text-muted-foreground">
-							<tr>
-								<th scope="col" className="px-4 py-2.5 font-semibold">{t("course.learner")}</th>
-								<th scope="col" className="px-2 py-2.5 font-semibold">{t("course.status")}</th>
-								<th scope="col" className="px-2 py-2.5 font-semibold">{t("course.progress")}</th>
-								<th scope="col" className="px-2 py-2.5 font-semibold">{t("course.best_score")}</th>
-								<th scope="col" className="px-2 py-2.5 font-semibold">{t("course.completed_on")}</th>
-								<th scope="col" className="px-4 py-2.5"><span className="sr-only">{t("course.actions")}</span></th>
-							</tr>
-						</thead>
-						<tbody>
-							{data.learners.map((learner) => (
-								<tr key={learner.id} className="border-t border-border">
-									<td className="px-4 py-2.5">
-										<span className="block break-words font-semibold">{learner.name}</span>
-										<span className="block break-all text-xs text-muted-foreground">
-											{[learner.email, learner.departmentName].filter(Boolean).join(" · ")}
-										</span>
-									</td>
-									<td className="px-2 py-2.5">{t(labels[learner.status])}</td>
-									<td className="px-2 py-2.5">{learner.percent}%</td>
-									<td className="px-2 py-2.5">{learner.bestScore === null ? "—" : `${learner.bestScore}%`}</td>
-									<td className="px-2 py-2.5">
-										{learner.completedAt
-											? new Date(learner.completedAt).toLocaleDateString(language, { dateStyle: "medium" })
-											: "—"}
-									</td>
-									<td className="px-4 py-2.5 text-right">
-										{!data.isMandatory && (
-											<button
-												type="button"
-												disabled={unassign.isPending}
-												className="text-xs font-medium text-danger-foreground hover:underline"
-												onClick={() => unassign.mutate(learner.id)}
-											>
-												{t("course.unassign")}
-											</button>
-										)}
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</section>
+				<DataTable
+					head={[
+						t("course.learner"),
+						t("course.status"),
+						t("course.progress"),
+						t("course.best_score"),
+						t("course.completed_on"),
+						<span key="actions" className="sr-only">{t("course.actions")}</span>,
+					]}
+				>
+					{data.learners.map((learner) => (
+						<tr key={learner.id} className={ROW_LINK} onClick={openRow(`/users/${learner.id}`)}>
+							<td className={TABLE_CELL}>
+								<Link
+									href={`/users/${learner.id}`}
+									className="block break-words font-semibold text-foreground no-underline hover:underline"
+								>
+									{learner.name}
+								</Link>
+								<span className="block break-all text-xs text-muted-foreground">
+									{[learner.email, learner.departmentName].filter(Boolean).join(" · ")}
+								</span>
+							</td>
+							<td className={TABLE_CELL}>{t(labels[learner.status])}</td>
+							<td className={TABLE_CELL}>{learner.percent}%</td>
+							<td className={TABLE_CELL}>{learner.bestScore === null ? "—" : `${learner.bestScore}%`}</td>
+							<td className={TABLE_CELL}>
+								{learner.completedAt
+									? new Date(learner.completedAt).toLocaleDateString(language, { dateStyle: "medium" })
+									: "—"}
+							</td>
+							<td data-no-row-link className={`${TABLE_CELL} text-right`}>
+								{!data.isMandatory && (
+									<button
+										type="button"
+										disabled={unassign.isPending}
+										className="text-xs font-medium text-danger-foreground hover:underline"
+										onClick={() => unassign.mutate(learner.id)}
+									>
+										{t("course.unassign")}
+									</button>
+								)}
+							</td>
+						</tr>
+					))}
+				</DataTable>
 			)}
 			{assigning && <AssignDialog courseId={id} data={data} onClose={() => setAssigning(false)} />}
 		</div>

@@ -8,12 +8,16 @@ import {
 	BUTTON_SMALL,
 	Alert,
 	buttonClass,
+	ConfirmModal,
+	DataTable,
 	Field,
+	FilterSelect,
 	LOGO,
 	Modal,
 	PageError,
 	PageLoading,
 	SelectField,
+	TABLE_CELL,
 	TextareaField,
 } from "../ui";
 
@@ -120,6 +124,7 @@ const NAV = [
 	{ href: "/superadmin/organizations", label: "Organizations" },
 	{ href: "/superadmin/users", label: "Users" },
 	{ href: "/superadmin/plans", label: "Plans" },
+	{ href: "/superadmin/modules", label: "Modules" },
 	{ href: "/superadmin/storage", label: "Storage" },
 ];
 
@@ -1209,6 +1214,461 @@ export function SuperPlansPage({ me }: { me: Me }) {
 					/>
 				)}
 			</Modal>
+		</Layout>
+	);
+}
+
+type ModuleKey = "projects" | "capacity_building" | "people_directory";
+type ModuleRelease = "coming_soon" | "pilot" | "available";
+
+interface ModulesOverview {
+	totalOrganizations: number;
+	modules: {
+		key: ModuleKey;
+		needsReview: boolean;
+		release: ModuleRelease;
+		paused: boolean;
+		organizationsOn: number;
+	}[];
+	plans: { id: number; name: string; modules: ModuleKey[] }[];
+	overrides: {
+		id: number;
+		organizationId: number;
+		organizationName: string;
+		moduleKey: ModuleKey;
+		until: string | null;
+		note: string;
+		grantedByName: string | null;
+		createdAt: string;
+	}[];
+	settings: {
+		organizationId: number;
+		organizationName: string;
+		moduleKey: ModuleKey;
+		enabled: boolean;
+		reviewAt: string | null;
+		changedAt: string;
+	}[];
+}
+
+const MODULES_KEY = ["superadmin", "modules"];
+const MODULE_NAMES: Record<ModuleKey, string> = {
+	projects: "Projects",
+	capacity_building: "Capacity Building",
+	people_directory: "People & Skills directory",
+};
+const RELEASE_NAMES: Record<ModuleRelease, string> = {
+	coming_soon: "Coming soon",
+	pilot: "Pilot",
+	available: "Generally available",
+};
+const SAFETY_RULES = [
+	{
+		title: "Capacity Building and the directory need a recorded safety review",
+		detail: "Organizations can't turn them on without one.",
+	},
+	{
+		title: "Superadmins can't open their records",
+		detail: "You see counts and settings only, never staff records or evidence.",
+	},
+	{
+		title: "Access is checked on the server",
+		detail: "Every request is checked, so a module is never only hidden from a menu.",
+	},
+];
+
+function useChangeModules() {
+	const queryClient = useQueryClient();
+	return () => queryClient.invalidateQueries({ queryKey: MODULES_KEY });
+}
+
+function GrantForm({ onDone }: { onDone: () => void }) {
+	const refresh = useChangeModules();
+	const organizations = useQuery({
+		queryKey: ORGS_KEY,
+		queryFn: () => api<{ organizations: Organization[] }>("/superadmin/organizations"),
+		select: (data) => data.organizations,
+	});
+	const [organizationId, setOrganizationId] = useState("");
+	const [moduleKey, setModuleKey] = useState<ModuleKey>("capacity_building");
+	const [until, setUntil] = useState("");
+	const [note, setNote] = useState("");
+	const grant = useMutation({
+		mutationFn: () =>
+			api("/superadmin/module-overrides", {
+				method: "POST",
+				body: {
+					organizationId: Number(organizationId),
+					moduleKey,
+					until: until ? `${until}T23:59:59.999Z` : null,
+					note,
+				},
+			}),
+		onSuccess: async () => {
+			await refresh();
+			onDone();
+		},
+	});
+	return (
+		<form
+			className="flex flex-col gap-3.5"
+			onSubmit={(event) => {
+				event.preventDefault();
+				grant.mutate();
+			}}
+		>
+			{grant.isError && <Alert>Couldn't grant access. Check the details and try again.</Alert>}
+			<SelectField
+				label="Organization"
+				required
+				value={organizationId}
+				onChange={(event) => setOrganizationId(event.target.value)}
+			>
+				<option value="">Choose an organization</option>
+				{organizations.data?.map((org) => (
+					<option key={org.id} value={org.id}>
+						{org.name}
+					</option>
+				))}
+			</SelectField>
+			<SelectField
+				label="Module"
+				value={moduleKey}
+				onChange={(event) => setModuleKey(event.target.value as ModuleKey)}
+			>
+				{(Object.keys(MODULE_NAMES) as ModuleKey[]).map((key) => (
+					<option key={key} value={key}>
+						{MODULE_NAMES[key]}
+					</option>
+				))}
+			</SelectField>
+			<Field
+				label="Until"
+				type="date"
+				hint="Leave empty to keep it until you remove it."
+				value={until}
+				onChange={(event) => setUntil(event.target.value)}
+			/>
+			<TextareaField
+				label="Why"
+				required
+				rows={2}
+				maxLength={500}
+				value={note}
+				onChange={(event) => setNote(event.target.value)}
+			/>
+			<p className="text-[13px] text-muted-foreground">
+				Their admin still has to switch it on, and record a safety review where one is needed.
+			</p>
+			<div className="flex justify-end gap-2">
+				<button type="button" className={buttonClass("outline")} onClick={onDone}>
+					Cancel
+				</button>
+				<button type="submit" disabled={grant.isPending || !organizationId || !note.trim()} className={buttonClass()}>
+					Grant access
+				</button>
+			</div>
+		</form>
+	);
+}
+
+export function SuperModulesPage({ me }: { me: Me }) {
+	const refresh = useChangeModules();
+	const overview = useQuery({
+		queryKey: MODULES_KEY,
+		queryFn: () => api<ModulesOverview>("/superadmin/modules"),
+	});
+	const [granting, setGranting] = useState(false);
+	const [toPause, setToPause] = useState<ModuleKey>("capacity_building");
+	const [pausing, setPausing] = useState<{ key: ModuleKey; paused: boolean } | null>(null);
+	const [removing, setRemoving] = useState<ModulesOverview["overrides"][number] | null>(null);
+	const changeModule = useMutation({
+		mutationFn: ({ key, ...body }: { key: ModuleKey; release?: ModuleRelease; paused?: boolean }) =>
+			api(`/superadmin/modules/${key}`, { method: "PATCH", body }),
+		onSuccess: async () => {
+			await refresh();
+			setPausing(null);
+		},
+	});
+	const changePlan = useMutation({
+		mutationFn: (body: { planId: number; moduleKey: ModuleKey; included: boolean }) =>
+			api("/superadmin/plan-modules", { method: "POST", body }),
+		onSettled: refresh,
+	});
+	const removeGrant = useMutation({
+		mutationFn: (id: number) => api(`/superadmin/module-overrides/${id}`, { method: "DELETE" }),
+		onSuccess: async () => {
+			await refresh();
+			setRemoving(null);
+		},
+	});
+	const data = overview.data;
+	return (
+		<Layout
+			me={me}
+			title="Modules"
+			subtitle="Which plans include which modules, and exceptions for single organizations"
+			action={
+				<button type="button" className={buttonClass()} onClick={() => setGranting(true)}>
+					+ Grant access to an organization
+				</button>
+			}
+		>
+			{overview.isPending && <PageLoading />}
+			{overview.isError && <PageError onRetry={() => overview.refetch()} />}
+			{data && (
+				<div className="flex flex-col gap-4">
+					{(changeModule.isError || changePlan.isError) && (
+						<Alert>That change didn't save. Reload the page and try again.</Alert>
+					)}
+					<div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(240px,1fr))]">
+						{data.modules.map((module) => {
+							const percent = data.totalOrganizations
+								? Math.round((module.organizationsOn / data.totalOrganizations) * 100)
+								: 0;
+							return (
+								<div key={module.key} className="flex flex-col gap-2 rounded-card border border-border bg-card px-4 py-3.5">
+									<div className="flex flex-wrap items-center justify-between gap-2">
+										<b className="text-[15px]">{MODULE_NAMES[module.key]}</b>
+										{module.paused && <Chip tone="danger">Paused</Chip>}
+									</div>
+									<p className="text-[13px]">
+										<b>{module.organizationsOn}</b>{" "}
+										<span className="text-muted-foreground">
+											of {plural(data.totalOrganizations, "organization")} have it on
+										</span>
+									</p>
+									<div
+										role="progressbar"
+										aria-valuenow={percent}
+										aria-valuemin={0}
+										aria-valuemax={100}
+										aria-label={`${MODULE_NAMES[module.key]} adoption`}
+										className="h-1.5 rounded-full bg-muted"
+									>
+										<div className="h-full rounded-full bg-primary" style={{ width: `${percent}%` }} />
+									</div>
+									<FilterSelect
+										label="Release"
+										value={module.release}
+										onChange={(value) => changeModule.mutate({ key: module.key, release: value as ModuleRelease })}
+									>
+										{(Object.keys(RELEASE_NAMES) as ModuleRelease[]).map((release) => (
+											<option key={release} value={release}>
+												{RELEASE_NAMES[release]}
+											</option>
+										))}
+									</FilterSelect>
+								</div>
+							);
+						})}
+					</div>
+
+					<div className="flex flex-wrap items-start gap-4">
+						<section className="min-w-0 flex-[3_1_520px] overflow-hidden rounded-card border border-border bg-card">
+							<h2 className="px-4 py-3 text-[15px] font-semibold">What each plan includes</h2>
+							<DataTable
+								bare
+								minWidth={560}
+								head={["Module", "Trial", ...data.plans.map((plan) => plan.name)]}
+							>
+								<tr>
+									<td className={`${TABLE_CELL} font-medium`}>Core (Policies, Courses, Files, Calendar)</td>
+									<td className={TABLE_CELL}>Included</td>
+									{data.plans.map((plan) => (
+										<td key={plan.id} className={TABLE_CELL}>Included</td>
+									))}
+								</tr>
+								{data.modules.map((module) => (
+									<tr key={module.key}>
+										<td className={`${TABLE_CELL} font-medium`}>{MODULE_NAMES[module.key]}</td>
+										<td className={TABLE_CELL}>{module.needsReview ? "Needs review" : "Included"}</td>
+										{data.plans.map((plan) => {
+											const included = plan.modules.includes(module.key);
+											return (
+												<td key={plan.id} className={TABLE_CELL}>
+													<label className="inline-flex items-center gap-1.5">
+														<input
+															type="checkbox"
+															className="size-4 accent-primary"
+															checked={included}
+															disabled={changePlan.isPending}
+															aria-label={`${MODULE_NAMES[module.key]} in ${plan.name}`}
+															onChange={(event) =>
+																changePlan.mutate({
+																	planId: plan.id,
+																	moduleKey: module.key,
+																	included: event.target.checked,
+																})
+															}
+														/>
+														{included && module.needsReview && <span className="text-xs">Needs review</span>}
+													</label>
+												</td>
+											);
+										})}
+									</tr>
+								))}
+							</DataTable>
+							<p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+								Trials get every released module. "Needs review" means the organization must record a privacy and safety
+								review before an admin can switch it on.
+							</p>
+						</section>
+
+						<div className="flex min-w-0 flex-[2_1_320px] flex-col gap-4">
+							<section className="flex flex-col gap-2.5 rounded-card border border-border bg-card px-4 py-3.5">
+								<h2 className="text-[15px] font-semibold">Platform-wide safety rules</h2>
+								<ul className="flex flex-col gap-2 text-[13px]">
+									{SAFETY_RULES.map((rule) => (
+										<li key={rule.title}>
+											<b>{rule.title}</b>
+											<span className="block text-muted-foreground">{rule.detail}</span>
+										</li>
+									))}
+								</ul>
+							</section>
+							<section className="rounded-card border border-destructive bg-card px-4 py-3.5">
+								<h2 className="text-[15px] font-semibold">Pause a module everywhere</h2>
+								<p className="mt-1 text-[13px] text-muted-foreground">
+									For incidents. Hides the module for all organizations; no records are deleted.
+								</p>
+								<div className="mt-2.5 flex flex-wrap items-center gap-2">
+									<FilterSelect
+										label="Module"
+										value={toPause}
+										onChange={(value) => setToPause(value as ModuleKey)}
+									>
+										{data.modules
+											.filter((module) => !module.paused)
+											.map((module) => (
+												<option key={module.key} value={module.key}>
+													{MODULE_NAMES[module.key]}
+												</option>
+											))}
+									</FilterSelect>
+									<button
+										type="button"
+										disabled={data.modules.every((module) => module.paused)}
+										className={buttonClass("dangerOutline")}
+										onClick={() => {
+											const key = data.modules.find((module) => module.key === toPause && !module.paused)?.key
+												?? data.modules.find((module) => !module.paused)?.key;
+											if (key) setPausing({ key, paused: true });
+										}}
+									>
+										Pause…
+									</button>
+								</div>
+								{data.modules
+									.filter((module) => module.paused)
+									.map((module) => (
+										<div key={module.key} className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2.5 text-[13px]">
+											<span><b>{MODULE_NAMES[module.key]}</b> is paused</span>
+											<button
+												type="button"
+												className={buttonClass("outline", BUTTON_SMALL)}
+												onClick={() => setPausing({ key: module.key, paused: false })}
+											>
+												Resume…
+											</button>
+										</div>
+									))}
+							</section>
+						</div>
+					</div>
+
+					<section className="overflow-hidden rounded-card border border-border bg-card">
+						<h2 className="px-4 py-3 text-[15px] font-semibold">Organization exceptions and watch list</h2>
+						{data.overrides.length + data.settings.length === 0 ? (
+							<p className="border-t border-border px-4 py-5 text-center text-muted-foreground">
+								No organization has set up a module yet.
+							</p>
+						) : (
+							<DataTable
+								bare
+								minWidth={720}
+								head={["Organization", "Module", "State", "Note", <span key="actions" className="sr-only">Actions</span>]}
+							>
+								{data.overrides.map((grant) => (
+									<tr key={`grant-${grant.id}`}>
+										<td className={`${TABLE_CELL} break-words font-medium`}>{grant.organizationName}</td>
+										<td className={TABLE_CELL}>{MODULE_NAMES[grant.moduleKey]}</td>
+										<td className={TABLE_CELL}>
+											<span className="flex flex-wrap items-center gap-1.5">
+												{grant.until ? `Access until ${formatDate(grant.until)}` : "Access with no end date"}
+												<Chip tone="neutral">Override</Chip>
+											</span>
+										</td>
+										<td className={`${TABLE_CELL} break-words`}>
+											{grant.note}
+											<span className="block text-xs text-muted-foreground">
+												{grant.grantedByName ? `Granted by ${grant.grantedByName} · ` : ""}
+												{formatDate(grant.createdAt)}
+											</span>
+										</td>
+										<td className={`${TABLE_CELL} text-right`}>
+											<button
+												type="button"
+												aria-label={`Remove ${MODULE_NAMES[grant.moduleKey]} access for ${grant.organizationName}`}
+												className={buttonClass("outline", BUTTON_SMALL)}
+												onClick={() => {
+													removeGrant.reset();
+													setRemoving(grant);
+												}}
+											>
+												Remove
+											</button>
+										</td>
+									</tr>
+								))}
+								{data.settings.map((row) => (
+									<tr key={`${row.organizationId}-${row.moduleKey}`}>
+										<td className={`${TABLE_CELL} break-words font-medium`}>{row.organizationName}</td>
+										<td className={TABLE_CELL}>{MODULE_NAMES[row.moduleKey]}</td>
+										<td className={TABLE_CELL}>{row.enabled ? "On" : "Off"}</td>
+										<td className={TABLE_CELL}>
+											{row.reviewAt ? `Review recorded ${formatDate(row.reviewAt)}` : "No review recorded"}
+										</td>
+										<td className={TABLE_CELL} />
+									</tr>
+								))}
+							</DataTable>
+						)}
+					</section>
+				</div>
+			)}
+			<Modal title="Grant access to an organization" open={granting} onClose={() => setGranting(false)}>
+				{granting && <GrantForm onDone={() => setGranting(false)} />}
+			</Modal>
+			<ConfirmModal
+				title={
+					pausing
+						? `${pausing.paused ? "Pause" : "Resume"} ${MODULE_NAMES[pausing.key]} everywhere?`
+						: ""
+				}
+				description={
+					pausing?.paused
+						? "It disappears from every organization's menu and its pages stop working right away. No records are deleted."
+						: "Organizations that had it on get it back right away."
+				}
+				confirmLabel={pausing?.paused ? "Pause everywhere" : "Resume"}
+				open={pausing !== null}
+				pending={changeModule.isPending}
+				failed={changeModule.isError}
+				onConfirm={() => pausing && changeModule.mutate({ key: pausing.key, paused: pausing.paused })}
+				onClose={() => setPausing(null)}
+			/>
+			<ConfirmModal
+				title={removing ? `Remove access for ${removing.organizationName}?` : ""}
+				description="Unless their plan includes this module, it disappears from their menu. Their records are kept."
+				confirmLabel="Remove access"
+				open={removing !== null}
+				pending={removeGrant.isPending}
+				failed={removeGrant.isError}
+				onConfirm={() => removing && removeGrant.mutate(removing.id)}
+				onClose={() => setRemoving(null)}
+			/>
 		</Layout>
 	);
 }

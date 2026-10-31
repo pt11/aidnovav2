@@ -1,3 +1,4 @@
+import { activeModuleKeys } from "./modules";
 import { memberCourseStats } from "./courses";
 import { memberPolicyStats } from "./policies";
 import { memberPhotoUrl } from "./media";
@@ -42,6 +43,7 @@ api.get("/me", requireUser, async (c) => {
 	return c.json({
 		user: currentUser,
 		activeOrganizationId: active?.organizationId ?? null,
+		activeModules: active ? await activeModuleKeys(c.get("db"), active.organizationId) : [],
 		memberships: memberships.map(({ ownerId: _ownerId, photoKey, ...membership }) => ({
 			...membership,
 			photoUrl: memberPhotoUrl(currentUser.id, photoKey),

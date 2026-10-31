@@ -20,6 +20,7 @@ import {
 	type AppEnv,
 	type Membership,
 } from "./middleware";
+import { upcomingEvents } from "./calendar";
 import { courseOverview, pendingCoursesFor } from "./courses";
 import { complianceOverview, pendingPoliciesFor } from "./policies";
 import type { Db } from "./db";
@@ -42,11 +43,42 @@ workspace.get("/organizations/current", requireUser, requireOrg, async (c) => {
 			phone: organizations.phone,
 			website: organizations.website,
 			address: organizations.address,
+			activityReportAccess: organizations.activityReportAccess,
 		})
 		.from(organizations)
 		.where(eq(organizations.id, c.get("org").organizationId));
 	return c.json(org);
 });
+
+workspace.put(
+	"/organizations/current/activity-report-access",
+	requireUser,
+	requireOrg,
+	requireRole("admin"),
+	async (c) => {
+		const { access } = await readJson(c.req.raw);
+		if (access !== "managers" && access !== "admins") {
+			return jsonError(c, 400, "INVALID_ACCESS", "Choose who can see activity.");
+		}
+		const db = c.get("db");
+		const org = c.get("org");
+		await db.batch([
+			db
+				.update(organizations)
+				.set({ activityReportAccess: access })
+				.where(eq(organizations.id, org.organizationId)),
+			db.insert(auditLog).values({
+				organizationId: org.organizationId,
+				actorUserId: c.get("user").id,
+				action: "organization.activity_access_changed",
+				targetType: "organization",
+				targetId: String(org.organizationId),
+				metadata: JSON.stringify({ access }),
+			}),
+		]);
+		return c.json({ ok: true });
+	},
+);
 
 workspace.patch(
 	"/organizations/current",
@@ -480,6 +512,7 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 		announcements: posted.total,
 		pendingPolicies,
 		pendingCourses,
+		upcoming: await upcomingEvents(db, organizationId),
 		manager,
 	});
 });

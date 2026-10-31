@@ -325,7 +325,12 @@ function PolicyPanel({ policy, onClose }: { policy: PolicySummary; onClose: () =
 							<li key={person.userId} className="flex items-center gap-2.5 px-3 py-2">
 								<Avatar name={person.name} muted />
 								<span className="min-w-0">
-									<span className="block break-words font-medium">{person.name}</span>
+									<Link
+										href={`/users/${person.userId}`}
+										className="block break-words font-medium text-foreground no-underline hover:underline"
+									>
+										{person.name}
+									</Link>
 									<span className="block text-xs text-muted-foreground">
 										{[
 											person.departmentName,

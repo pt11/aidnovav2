@@ -2,13 +2,15 @@ import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download } from "lucide-react";
 import { Link } from "wouter";
-import { api, useDepartments } from "../api";
+import { api, ApiError, useDepartments } from "../api";
 import { downloadCsv } from "../csv";
 import { useI18n } from "../i18n";
 import {
 	Avatar,
 	BUTTON_SMALL,
 	buttonClass,
+	DataTable,
+	TABLE_CELL,
 	Chip,
 	FilterSelect,
 	Modal,
@@ -131,34 +133,7 @@ function Tile({ label, value, detail }: { label: string; value: ReactNode; detai
 	);
 }
 
-function Table({
-	minWidth = 640,
-	head,
-	children,
-}: {
-	minWidth?: number;
-	head: string[];
-	children: ReactNode;
-}) {
-	return (
-		<div className="overflow-x-auto rounded-card border border-border bg-card">
-			<table className="w-full text-left text-[13px]" style={{ minWidth }}>
-				<thead className="bg-background text-xs text-muted-foreground">
-					<tr>
-						{head.map((title) => (
-							<th key={title} scope="col" className="px-3 py-2.5 font-semibold first:pl-4 last:pr-4">
-								{title}
-							</th>
-						))}
-					</tr>
-				</thead>
-				<tbody>{children}</tbody>
-			</table>
-		</div>
-	);
-}
-
-const cellClass = "px-3 py-2.5 first:pl-4 last:pr-4";
+const cellClass = TABLE_CELL;
 
 export function ActivityDialog({
 	path,
@@ -173,6 +148,7 @@ export function ActivityDialog({
 	const [search, setSearch] = useState("");
 	const activity = useQuery({
 		queryKey: ["report-activity", path],
+		retry: false,
 		queryFn: () => api<{ title: string; people: ActivityPerson[] }>(path),
 	});
 	const when = (value: string | null | undefined) =>
@@ -224,7 +200,14 @@ export function ActivityDialog({
 		>
 			<div className="flex flex-col gap-3">
 				{activity.isPending && <PageLoading />}
-				{activity.isError && <PageError onRetry={() => activity.refetch()} />}
+				{activity.isError &&
+					(activity.error instanceof ApiError && activity.error.code === "ACTIVITY_ADMINS_ONLY" ? (
+						<p role="status" className="rounded-md bg-background px-3 py-2.5 text-[13px]">
+							{t("reports.admins_only")}
+						</p>
+					) : (
+						<PageError onRetry={() => activity.refetch()} />
+					))}
 				{activity.data && (
 					<>
 						<div className="flex flex-wrap items-center gap-2">
@@ -239,7 +222,9 @@ export function ActivityDialog({
 								<li key={person.userId} className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
 									<Avatar name={person.name} photoUrl={person.photoUrl} muted={person.views + (person.downloads ?? 0) === 0} />
 									<span className="min-w-0 flex-[1_1_160px]">
-										<span className="block break-words font-medium">{person.name}</span>
+										<Link href={`/users/${person.userId}`} className="block break-words font-medium text-foreground no-underline hover:underline">
+											{person.name}
+										</Link>
 										<span className="block text-xs text-muted-foreground">
 											{person.departmentName ?? t("users.not_set")}
 										</span>
@@ -361,7 +346,7 @@ function CourseTable({ rows }: { rows: CourseRow[] }) {
 	const { t } = useI18n();
 	if (rows.length === 0) return <StatePanel title={t("reports.no_courses")} />;
 	return (
-		<Table
+		<DataTable
 			minWidth={760}
 			head={[
 				t("nav.courses"),
@@ -390,7 +375,7 @@ function CourseTable({ rows }: { rows: CourseRow[] }) {
 					</td>
 				</tr>
 			))}
-		</Table>
+		</DataTable>
 	);
 }
 
@@ -594,7 +579,7 @@ export function ReportsPage() {
 				(policies.data.length === 0 ? (
 					<StatePanel title={t("reports.no_policies")} />
 				) : (
-					<Table
+					<DataTable
 						minWidth={760}
 						head={[
 							t("policies.col_policy"),
@@ -631,14 +616,14 @@ export function ReportsPage() {
 								</td>
 							</tr>
 						))}
-					</Table>
+					</DataTable>
 				))}
 
 			{tab === "announcements" && announcements.data &&
 				(announcements.data.announcements.length === 0 ? (
 					<StatePanel title={t("reports.no_announcements")} />
 				) : (
-					<Table
+					<DataTable
 						minWidth={720}
 						head={[
 							t("nav.announcements"),
@@ -670,14 +655,14 @@ export function ReportsPage() {
 								</td>
 							</tr>
 						))}
-					</Table>
+					</DataTable>
 				))}
 
 			{tab === "files" && files.data &&
 				(files.data.length === 0 ? (
 					<StatePanel title={t("reports.no_files")} />
 				) : (
-					<Table
+					<DataTable
 						minWidth={640}
 						head={[t("nav.files"), t("reports.col_people"), t("reports.col_views_clicks"), t("reports.col_downloads"), ""]}
 					>
@@ -704,11 +689,11 @@ export function ReportsPage() {
 								</td>
 							</tr>
 						))}
-					</Table>
+					</DataTable>
 				))}
 
 			{tab === "departments" && byDepartment.data && (
-				<Table
+				<DataTable
 					minWidth={720}
 					head={[
 						t("users.department"),
@@ -731,7 +716,7 @@ export function ReportsPage() {
 							<td className={cellClass}>{row.inProgress}</td>
 						</tr>
 					))}
-				</Table>
+				</DataTable>
 			)}
 
 			<p className="text-xs text-muted-foreground">{t("reports.footnote")}</p>

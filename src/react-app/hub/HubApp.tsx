@@ -33,6 +33,7 @@ import {
 	SettingsStaffSignInPage,
 } from "./pages/SettingsArea";
 import {
+	SuperModulesPage,
 	SuperOrganizationsPage,
 	SuperOverviewPage,
 	SuperPlansPage,
@@ -51,6 +52,9 @@ import { LessonEditorPage } from "./pages/LessonEditor";
 import { QuizBuilderPage } from "./pages/QuizBuilder";
 import { ReportsPage } from "./pages/Reports";
 import { UsersPage } from "./pages/Users";
+import { CalendarPage } from "./pages/Calendar";
+import { SettingsModulesPage } from "./pages/SettingsModules";
+import { UserProfilePage } from "./pages/UserProfile";
 import { canManage, WorkspaceShell } from "./Shell";
 import { buttonClass, StartupScreen, StatePanel } from "./ui";
 
@@ -270,7 +274,13 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<FilesPage canManage={manager} />
 				</Route>
 				<Route path="/calendar">
-					<LaterPage labelKey="nav.calendar" />
+					<CalendarPage canManage={manager} />
+				</Route>
+				<Route path="/projects">
+					{me.activeModules.includes("projects") ? <LaterPage labelKey="nav.projects" /> : <NoAccessPage />}
+				</Route>
+				<Route path="/capacity">
+					{me.activeModules.includes("capacity_building") ? <LaterPage labelKey="nav.capacity" /> : <NoAccessPage />}
 				</Route>
 				<Route path="/notifications">
 					<LaterPage labelKey="shell.notifications" />
@@ -290,11 +300,19 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				<Route path="/settings/plan">
 					{manager ? <SettingsPlanPage org={org} /> : <NoAccessPage />}
 				</Route>
+				<Route path="/settings/modules">
+					{org.role === "admin" ? <SettingsModulesPage org={org} /> : <NoAccessPage />}
+				</Route>
 				<Route path="/settings/departments">
 					{manager ? <SettingsDepartmentsPage isAdmin={org.role === "admin"} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/users">
 					{manager ? <UsersPage me={me} role={org.role} /> : <NoAccessPage />}
+				</Route>
+				<Route path="/users/:id">
+					{({ id }) =>
+						manager ? <UserProfilePage key={id} id={id} me={me} role={org.role} /> : <NoAccessPage />
+					}
 				</Route>
 				<Route path="/reports">{manager ? <ReportsPage /> : <NoAccessPage />}</Route>
 				<Route path="/settings">
@@ -374,6 +392,9 @@ function Gate() {
 				</Route>
 				<Route path="/superadmin/plans">
 					<SuperPlansPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/modules">
+					<SuperModulesPage me={superMe} />
 				</Route>
 				<Route path="/superadmin/storage">
 					<SuperStoragePage me={superMe} />

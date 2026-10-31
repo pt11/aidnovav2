@@ -171,6 +171,10 @@ export const organizations = sqliteTable("organizations", {
 	billingCycle: text("billing_cycle", { enum: ["monthly", "yearly"] })
 		.notNull()
 		.default("monthly"),
+	// Who can see who opened what. Totals and policy compliance aren't affected.
+	activityReportAccess: text("activity_report_access", { enum: ["managers", "admins"] })
+		.notNull()
+		.default("managers"),
 	planId: integer("plan_id").references(() => subscriptionPlans.id, {
 		onDelete: "set null",
 	}),
@@ -806,6 +810,87 @@ export const contentViews = sqliteTable(
 		primaryKey({ columns: [table.targetType, table.targetId, table.userId] }),
 		index("content_views_org_idx").on(table.organizationId, table.targetType),
 	],
+);
+
+export const calendarEvents = sqliteTable(
+	"calendar_events",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		type: text("type", { enum: ["training", "meeting", "deadline", "holiday"] }).notNull(),
+		// An all-day event's dates are stored at midnight UTC, and ends on its last day.
+		startsAt: integer("starts_at", { mode: "timestamp_ms" }).notNull(),
+		endsAt: integer("ends_at", { mode: "timestamp_ms" }).notNull(),
+		allDay: integer("all_day", { mode: "boolean" }).notNull().default(false),
+		location: text("location"),
+		meetingUrl: text("meeting_url"),
+		details: text("details"),
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [index("calendar_events_org_idx").on(table.organizationId, table.startsAt)],
+);
+
+// Set by the AidNova team: how far along a module is, and a stop switch for incidents.
+export const modulePlatform = sqliteTable("module_platform", {
+	moduleKey: text("module_key").primaryKey(),
+	release: text("release", { enum: ["coming_soon", "pilot", "available"] })
+		.notNull()
+		.default("coming_soon"),
+	paused: integer("paused", { mode: "boolean" }).notNull().default(false),
+	updatedAt: updatedAt(),
+});
+
+export const planModules = sqliteTable(
+	"plan_modules",
+	{
+		planId: integer("plan_id")
+			.notNull()
+			.references(() => subscriptionPlans.id, { onDelete: "cascade" }),
+		moduleKey: text("module_key").notNull(),
+	},
+	(table) => [primaryKey({ columns: [table.planId, table.moduleKey] })],
+);
+
+// An organization's own choice. Kept separate from what its plan allows.
+export const organizationModules = sqliteTable(
+	"organization_modules",
+	{
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		moduleKey: text("module_key").notNull(),
+		enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+		changedBy: text("changed_by").references(() => user.id, { onDelete: "set null" }),
+		changedAt: integer("changed_at", { mode: "timestamp_ms" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		reviewAt: integer("review_at", { mode: "timestamp_ms" }),
+		reviewNote: text("review_note"),
+		reviewBy: text("review_by").references(() => user.id, { onDelete: "set null" }),
+	},
+	(table) => [primaryKey({ columns: [table.organizationId, table.moduleKey] })],
+);
+
+// A one-off grant from the AidNova team, such as pilot access beyond the plan.
+export const moduleOverrides = sqliteTable(
+	"module_overrides",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		moduleKey: text("module_key").notNull(),
+		until: integer("until", { mode: "timestamp_ms" }),
+		note: text("note").notNull(),
+		grantedBy: text("granted_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+	},
+	(table) => [uniqueIndex("module_overrides_unique").on(table.organizationId, table.moduleKey)],
 );
 
 export const auditLog = sqliteTable(

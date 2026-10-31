@@ -29,6 +29,7 @@ export interface Me {
 	};
 	activeOrganizationId: number | null;
 	memberships: Membership[];
+	activeModules: string[];
 }
 
 export class ApiError extends Error {
