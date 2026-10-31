@@ -1,9 +1,9 @@
 import { useEffect, type ReactNode } from "react";
 import "./legal.css";
 
-const LOGO = "/aidnova-logo.png";
+const LOGO = "/aidnova-logo.webp";
 const CONTACT_EMAIL = "helloaidnova@gmail.com";
-const LAST_UPDATED = "August 4, 2026";
+const LAST_UPDATED = "October 31, 2026";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
 	return (
@@ -325,7 +325,7 @@ export function TermsOfServicePage() {
 
 			<Section title="14. Termination">
 				<p>
-					You may cancel your subscription at any time from your account settings or by contacting us. We may suspend or
+					You may cancel your subscription by giving us 30 days' notice, by contacting us at any time. We may suspend or
 					terminate your access immediately if you breach these Terms or if your payment fails after reasonable notice.
 					Upon termination, your right to use the Service ceases. We will retain Your Content for 90 days after termination
 					to allow data export, after which it will be deleted.
