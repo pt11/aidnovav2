@@ -1,8 +1,9 @@
-import { and, count, desc, eq, inArray, isNull, lte } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm";
 import { Hono } from "hono";
 import {
 	announcements,
 	auditLog,
+	contentViews,
 	departments,
 	invitations,
 	organizations,
@@ -19,7 +20,7 @@ import {
 	type AppEnv,
 	type Membership,
 } from "./middleware";
-import { pendingCoursesFor } from "./courses";
+import { courseOverview, pendingCoursesFor } from "./courses";
 import { complianceOverview, pendingPoliciesFor } from "./policies";
 import type { Db } from "./db";
 import { cleanText, isEmail, isSafeLink, readJson } from "./validate";
@@ -180,7 +181,37 @@ workspace.get("/announcements", requireUser, requireOrg, async (c) => {
 		.where(eq(announcements.organizationId, c.get("org").organizationId))
 		.orderBy(desc(announcements.createdAt), desc(announcements.id))
 		.limit(100);
-	return c.json({ announcements: rows });
+	const views = await c
+		.get("db")
+		.select({
+			targetId: contentViews.targetId,
+			userId: contentViews.userId,
+			respondedAt: contentViews.respondedAt,
+		})
+		.from(contentViews)
+		.where(
+			and(
+				eq(contentViews.organizationId, c.get("org").organizationId),
+				eq(contentViews.targetType, "announcement"),
+			),
+		);
+	const canSeeNumbers = c.get("org").role !== "staff";
+	const userId = c.get("user").id;
+	return c.json({
+		announcements: rows.map((row) => {
+			const mine = views.filter((view) => view.targetId === row.id);
+			return {
+				...row,
+				responded: mine.some((view) => view.userId === userId && view.respondedAt),
+				...(canSeeNumbers
+					? {
+							viewers: mine.length,
+							responses: mine.filter((view) => view.respondedAt).length,
+						}
+					: {}),
+			};
+		}),
+	});
 });
 
 function readAnnouncement(body: Record<string, unknown>) {
@@ -376,10 +407,26 @@ async function managerDashboard(db: Db, org: Membership) {
 	return {
 		compliance,
 		membersWithoutDepartment: withoutDepartment.total,
+		courses: await courseOverview(db, org.organizationId),
+		joinedThisMonth: await joinedSince(db, org.organizationId),
 		draftPolicies,
 		reviewDue,
 		activity,
 	};
+}
+
+async function joinedSince(db: Db, organizationId: number) {
+	const [row] = await db
+		.select({ total: count() })
+		.from(userProfiles)
+		.where(
+			and(
+				eq(userProfiles.organizationId, organizationId),
+				eq(userProfiles.isActive, true),
+				gt(userProfiles.joinedAt, new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)),
+			),
+		);
+	return row.total;
 }
 
 workspace.get("/dashboard", requireUser, requireOrg, async (c) => {

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="robots" content="noindex" />
+		<title>You're offline · AidNova</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+			}
+			body {
+				margin: 0;
+				min-height: 100dvh;
+				display: grid;
+				place-items: center;
+				padding: 24px;
+				box-sizing: border-box;
+				background: #f4f4f5;
+				color: #030711;
+				font-family: "Noto Sans Myanmar", system-ui, sans-serif;
+				text-align: center;
+			}
+			main {
+				max-width: 360px;
+			}
+			img {
+				width: 56px;
+				height: 56px;
+				border-radius: 12px;
+			}
+			h1 {
+				margin: 16px 0 6px;
+				font-size: 20px;
+			}
+			p {
+				margin: 4px 0;
+				line-height: 26px;
+				color: #666d7a;
+			}
+			button {
+				margin-top: 16px;
+				min-height: 44px;
+				padding: 0 20px;
+				border: 0;
+				border-radius: 6px;
+				background: #0066f5;
+				color: #fff;
+				font: inherit;
+				font-weight: 500;
+			}
+			@media (prefers-color-scheme: dark) {
+				body {
+					background: #0f1117;
+					color: #f3f4f7;
+				}
+				p {
+					color: #a9b4c4;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<img src="/aidnova-logo.png" alt="" />
+			<h1>You're offline</h1>
+			<p>AidNova needs an internet connection. Check yours and try again.</p>
+			<p lang="my">AidNova အတွက် အင်တာနက်လိုအပ်ပါသည်။ ချိတ်ဆက်မှုကို စစ်ဆေးပြီး ထပ်ကြိုးစားပါ။</p>
+			<button type="button" onclick="location.reload()">Try again · ထပ်ကြိုးစားရန်</button>
+		</main>
+	</body>
+</html>

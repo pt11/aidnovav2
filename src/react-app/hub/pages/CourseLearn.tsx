@@ -1056,6 +1056,7 @@ export function CourseQuizPage({ id }: { id: string }) {
 
 interface Certificate {
 	id: number;
+	logoUrl: string | null;
 	recipientName: string;
 	courseTitle: string;
 	organizationName: string;
@@ -1068,6 +1069,9 @@ function CertificateSheet({ certificate }: { certificate: Certificate }) {
 	const { t, language } = useI18n();
 	return (
 		<div className="flex flex-col items-center gap-2 rounded-card border-2 border-[#0066F5] bg-white p-8 text-center text-[#030711] sm:p-12">
+			{certificate.logoUrl && (
+				<img src={certificate.logoUrl} alt="" className="mb-2 size-14 rounded-md object-contain" />
+			)}
 			<p className="text-xs font-semibold tracking-[0.1em] text-[#0066F5]">{t("certificate.heading")}</p>
 			<p className="mt-4 break-words text-3xl font-semibold">{certificate.recipientName}</p>
 			<p className="text-[#666D7A]">{t("certificate.has_completed")}</p>

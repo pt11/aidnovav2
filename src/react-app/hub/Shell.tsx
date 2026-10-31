@@ -28,7 +28,7 @@ import {
 import { Link, useLocation } from "wouter";
 import { api, authClient, type Me, type Membership, type Role } from "./api";
 import { useI18n } from "./i18n";
-import { LanguageSwitch } from "./ui";
+import { Avatar, LanguageSwitch } from "./ui";
 
 interface NavItem {
 	url: string;
@@ -245,6 +245,11 @@ function TrialCard({ org }: { org: Membership }) {
 					style={{ width: `${percent}%` }}
 				/>
 			</div>
+			{canManage(org.role) && (
+				<Link href="/settings/plan" className="mt-2 block text-xs font-medium text-selected-foreground no-underline hover:underline">
+					{t("shell.request_upgrade")} →
+				</Link>
+			)}
 		</div>
 	);
 }
@@ -345,12 +350,7 @@ function SidebarContent({
 				)}
 				<TrialCard org={org} />
 				<div className="flex items-center gap-2.5 p-1">
-					<span
-						aria-hidden="true"
-						className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground"
-					>
-						{initials(me.user.name)}
-					</span>
+					<Avatar name={me.user.name} photoUrl={org.photoUrl} />
 					<div className="min-w-0 flex-1 leading-tight">
 						<p className="truncate font-semibold">{me.user.name}</p>
 						<p className="truncate text-xs text-muted-foreground">{me.user.email}</p>
@@ -370,26 +370,77 @@ function SidebarContent({
 	);
 }
 
+export type ThemeMode = "light" | "dark" | "system";
+
+function readThemeMode(): ThemeMode {
+	try {
+		const stored = localStorage.getItem("aidnova_theme");
+		return stored === "dark" || stored === "system" ? stored : "light";
+	} catch {
+		return "light";
+	}
+}
+
+function deviceIsDark() {
+	return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
 export function useTheme() {
+	const [mode, setModeState] = useState(readThemeMode);
 	const [dark, setDarkState] = useState(() =>
 		document.documentElement.classList.contains("dark"),
 	);
-	function setDark(next: boolean) {
-		document.documentElement.classList.toggle("dark", next);
+
+	// The header button and Settings stay in step, and "match device" follows the device.
+	useEffect(() => {
+		const apply = () => {
+			const next = readThemeMode();
+			const isDark = next === "dark" || (next === "system" && deviceIsDark());
+			document.documentElement.classList.toggle("dark", isDark);
+			setModeState(next);
+			setDarkState(isDark);
+		};
+		const media = window.matchMedia("(prefers-color-scheme: dark)");
+		media.addEventListener("change", apply);
+		window.addEventListener("aidnova-theme", apply);
+		return () => {
+			media.removeEventListener("change", apply);
+			window.removeEventListener("aidnova-theme", apply);
+		};
+	}, []);
+
+	function setMode(next: ThemeMode) {
 		try {
-			localStorage.setItem("aidnova_theme", next ? "dark" : "light");
+			localStorage.setItem("aidnova_theme", next);
 		} catch {
 			// The choice just won't persist, for example in a private window.
 		}
-		setDarkState(next);
+		document.documentElement.classList.toggle(
+			"dark",
+			next === "dark" || (next === "system" && deviceIsDark()),
+		);
+		setModeState(next);
+		setDarkState(document.documentElement.classList.contains("dark"));
+		window.dispatchEvent(new Event("aidnova-theme"));
 	}
-	return { dark, setDark, toggle: () => setDark(!dark) };
+	return { mode, dark, setMode, toggle: () => setMode(dark ? "light" : "dark") };
 }
 
 function HeaderSearch() {
 	const { t } = useI18n();
 	const [, navigate] = useLocation();
 	const [query, setQuery] = useState("");
+	const input = useRef<HTMLInputElement>(null);
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+				event.preventDefault();
+				input.current?.focus();
+			}
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, []);
 	function submit(event: FormEvent) {
 		event.preventDefault();
 		navigate(`/hub?q=${encodeURIComponent(query.trim())}`);
@@ -400,12 +451,16 @@ function HeaderSearch() {
 				<Search size={16} aria-hidden="true" className="shrink-0" />
 				<span className="sr-only">{t("hub.search_placeholder")}</span>
 				<input
+					ref={input}
 					type="search"
 					placeholder={t("hub.search_placeholder")}
 					value={query}
 					onChange={(event) => setQuery(event.target.value)}
 					className="min-w-0 flex-1 bg-transparent text-foreground outline-none"
 				/>
+				<kbd className="hidden rounded border border-border bg-card px-1.5 font-sans text-[11px] text-muted-foreground lg:block">
+					⌘K
+				</kbd>
 			</label>
 		</form>
 	);
@@ -530,7 +585,7 @@ function MobileBottomNav({ role }: { role: Role }) {
 			)}
 			<nav
 				aria-label={t("shell.main_nav")}
-				className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-card md:hidden"
+				className="fixed inset-x-0 bottom-0 z-40 flex border-t border-border bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
 				style={{
 					height: "calc(3.5rem + env(safe-area-inset-bottom))",
 					paddingBottom: "env(safe-area-inset-bottom)",

@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
+import { twoFactorClient } from "better-auth/client/plugins";
 import { createAuthClient } from "better-auth/react";
 
-export const authClient = createAuthClient();
+export const authClient = createAuthClient({ plugins: [twoFactorClient()] });
 
 export type Role = "staff" | "manager" | "admin";
 export type OrgAccess = "ok" | "trial_expired" | "blocked";
@@ -11,6 +12,7 @@ export interface Membership {
 	name: string;
 	slug: string;
 	logoUrl: string | null;
+	photoUrl: string | null;
 	role: Role;
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
 	trialEndDate: string | null;
@@ -18,7 +20,13 @@ export interface Membership {
 }
 
 export interface Me {
-	user: { id: string; name: string; email: string; isSuperAdmin: boolean };
+	user: {
+		id: string;
+		name: string;
+		email: string;
+		isSuperAdmin: boolean;
+		twoFactorEnabled: boolean;
+	};
 	activeOrganizationId: number | null;
 	memberships: Membership[];
 }

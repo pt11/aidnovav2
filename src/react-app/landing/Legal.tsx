@@ -102,6 +102,7 @@ export function PrivacyPolicyPage() {
 				<Subsection title="1.2 Information collected automatically">
 					<ul>
 						<li><strong>Usage data:</strong> pages visited, features used, and actions taken within the Service.</li>
+						<li><strong>Content activity:</strong> which policies, announcements, files, links and courses each person opens, downloads, acknowledges or completes. Managers and administrators of that person's organization can see this in reports.</li>
 						<li><strong>Log data:</strong> IP address, browser type, operating system, referring URL, and timestamps.</li>
 						<li><strong>Cookies &amp; similar technologies:</strong> session cookies required for authentication and preference cookies for language/theme settings.</li>
 					</ul>

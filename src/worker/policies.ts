@@ -1,3 +1,4 @@
+import { recordView } from "./reports";
 import { and, desc, eq, gt, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { getBaseUrl } from "./auth";
@@ -226,6 +227,100 @@ export async function readablePublishedPolicies(
 }
 
 // How the organization is doing on mandatory policies, for manager dashboards.
+// Each published policy's audience and acknowledgments, optionally for one
+// department ("none" means people without a department).
+export async function policyReportRows(
+	db: Db,
+	organizationId: number,
+	departmentId: number | "none" | null,
+) {
+	const [rows, access, members, acks] = await Promise.all([
+		db
+			.select({
+				id: policies.id,
+				title: policies.title,
+				category: policies.category,
+				isMandatory: policies.isMandatory,
+				version: policies.version,
+			})
+			.from(policies)
+			.where(and(eq(policies.organizationId, organizationId), eq(policies.status, "published")))
+			.orderBy(desc(policies.isMandatory), policies.title),
+		loadAccess(db, organizationId),
+		activeMembers(db, organizationId),
+		db
+			.select({
+				policyId: policyAcknowledgments.policyId,
+				userId: policyAcknowledgments.userId,
+				version: policyAcknowledgments.policyVersion,
+			})
+			.from(policyAcknowledgments)
+			.innerJoin(policies, eq(policyAcknowledgments.policyId, policies.id))
+			.where(eq(policies.organizationId, organizationId)),
+	]);
+	const done = new Set(acks.map((ack) => `${ack.policyId}:${ack.version}:${ack.userId}`));
+	const inScope = (member: Member) =>
+		departmentId === null ||
+		(departmentId === "none" ? member.departmentId === null : member.departmentId === departmentId);
+	return rows.map((policy) => {
+		const audience = audienceOf(
+			members,
+			(access.get(policy.id) ?? []).map((department) => department.id),
+		);
+		const scoped = audience.filter(inScope);
+		return {
+			...policy,
+			audienceIds: audience.map((member) => member.userId),
+			required: scoped.length,
+			acknowledged: scoped.filter((member) =>
+				done.has(`${policy.id}:${policy.version}:${member.userId}`),
+			).length,
+		};
+	});
+}
+
+// How many mandatory policies each person has acknowledged, out of those they need.
+export async function memberPolicyStats(db: Db, organizationId: number) {
+	const [rows, access, members, acks] = await Promise.all([
+		db
+			.select({ id: policies.id, version: policies.version })
+			.from(policies)
+			.where(
+				and(
+					eq(policies.organizationId, organizationId),
+					eq(policies.status, "published"),
+					eq(policies.isMandatory, true),
+				),
+			),
+		loadAccess(db, organizationId),
+		activeMembers(db, organizationId),
+		db
+			.select({
+				policyId: policyAcknowledgments.policyId,
+				userId: policyAcknowledgments.userId,
+				version: policyAcknowledgments.policyVersion,
+			})
+			.from(policyAcknowledgments)
+			.innerJoin(policies, eq(policyAcknowledgments.policyId, policies.id))
+			.where(eq(policies.organizationId, organizationId)),
+	]);
+	const done = new Set(acks.map((ack) => `${ack.policyId}:${ack.version}:${ack.userId}`));
+	const stats = new Map<string, { done: number; total: number }>();
+	for (const policy of rows) {
+		const audience = audienceOf(
+			members,
+			(access.get(policy.id) ?? []).map((department) => department.id),
+		);
+		for (const member of audience) {
+			const row = stats.get(member.userId) ?? { done: 0, total: 0 };
+			row.total++;
+			if (done.has(`${policy.id}:${policy.version}:${member.userId}`)) row.done++;
+			stats.set(member.userId, row);
+		}
+	}
+	return stats;
+}
+
 export async function complianceOverview(db: Db, org: Membership) {
 	const [rows, access, members, acks] = await Promise.all([
 		db
@@ -510,6 +605,9 @@ policyRoutes.get("/policies/:id", requireUser, requireOrg, async (c) => {
 	// The same answer as a missing policy, so its existence isn't revealed.
 	if (!canRead(policy, accessIds, org, departmentId)) {
 		return jsonError(c, 404, "NOT_FOUND", "That policy doesn't exist.");
+	}
+	if (c.req.query("view") === "1") {
+		await recordView(db, org.organizationId, "policy", policy.id, userId);
 	}
 	const [ack] = await db
 		.select({ acknowledgedAt: policyAcknowledgments.acknowledgedAt })

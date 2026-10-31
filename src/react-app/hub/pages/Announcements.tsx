@@ -1,9 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Megaphone } from "lucide-react";
+import { Check, Megaphone } from "lucide-react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 import {
+	Chip,
+	BUTTON_SMALL,
 	Alert,
 	buttonClass,
 	ConfirmModal,
@@ -11,9 +13,12 @@ import {
 	Modal,
 	PageError,
 	PageLoading,
+	Segmented,
 	StatePanel,
 	TextareaField,
 } from "../ui";
+
+import { ActivityDialog } from "./Reports";
 
 export type Priority = "normal" | "high" | "urgent";
 
@@ -24,26 +29,68 @@ interface Announcement {
 	priority: Priority;
 	createdAt: string;
 	authorName: string | null;
+	responded: boolean;
+	viewers?: number;
+	responses?: number;
+}
+
+// Counted after a card has been at least half on screen for a moment, because a
+// quick scroll past isn't reading it.
+function useRecordsViews() {
+	const pending = useRef(new Set<number>());
+	const sent = useRef(new Set<number>());
+	const timers = useRef(new Map<number, number>());
+	const observer = useRef<IntersectionObserver | null>(null);
+	useEffect(() => {
+		const flushTimer = window.setInterval(() => {
+			if (pending.current.size === 0) return;
+			const ids = [...pending.current];
+			pending.current.clear();
+			api("/announcements/views", { method: "POST", body: { ids } }).catch(() => undefined);
+		}, 2000);
+		const visibleFor = timers.current;
+		observer.current = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					const id = Number((entry.target as HTMLElement).dataset.announcementId);
+					if (entry.isIntersecting) {
+						if (!sent.current.has(id) && !visibleFor.has(id)) {
+							visibleFor.set(
+								id,
+								window.setTimeout(() => {
+									sent.current.add(id);
+									pending.current.add(id);
+								}, 1200),
+							);
+						}
+					} else {
+						window.clearTimeout(visibleFor.get(id));
+						visibleFor.delete(id);
+					}
+				}
+			},
+			{ threshold: 0.5 },
+		);
+		return () => {
+			observer.current?.disconnect();
+			window.clearInterval(flushTimer);
+			visibleFor.forEach((timer) => window.clearTimeout(timer));
+			visibleFor.clear();
+		};
+	}, []);
+	return (element: HTMLElement | null) => {
+		if (element) observer.current?.observe(element);
+	};
 }
 
 const QUERY_KEY = ["announcements"];
 const FILTERS = ["all", "urgent", "high", "normal"] as const;
-const PRIORITY_STYLES: Record<Priority, string> = {
-	normal: "border border-border text-foreground",
-	high: "bg-primary text-primary-foreground",
-	urgent: "bg-destructive text-primary-foreground",
-};
+const PRIORITY_TONES = { normal: "outline", high: "primary", urgent: "danger" } as const;
 const PRIORITY_ORDER: Record<Priority, number> = { urgent: 0, high: 1, normal: 2 };
 
 export function PriorityBadge({ priority }: { priority: Priority }) {
 	const { t } = useI18n();
-	return (
-		<span
-			className={`inline-block whitespace-nowrap rounded-full px-2 text-[11px] font-semibold leading-5 ${PRIORITY_STYLES[priority]}`}
-		>
-			{t(`announcements.${priority}`)}
-		</span>
-	);
+	return <Chip tone={PRIORITY_TONES[priority]}>{t(`announcements.${priority}`)}</Chip>;
 }
 
 function AnnouncementForm({
@@ -91,6 +138,7 @@ function AnnouncementForm({
 				label={t("announcements.title_field")}
 				required
 				maxLength={500}
+				placeholder={t("announcements.title_placeholder")}
 				value={title}
 				onChange={(event) => setTitle(event.target.value)}
 			/>
@@ -99,6 +147,7 @@ function AnnouncementForm({
 				required
 				maxLength={10000}
 				rows={6}
+				placeholder={t("announcements.content_placeholder")}
 				value={content}
 				onChange={(event) => setContent(event.target.value)}
 			/>
@@ -120,6 +169,9 @@ function AnnouncementForm({
 					</label>
 				))}
 			</fieldset>
+			{!existing && (
+				<p className="rounded-md bg-background px-2.5 py-2 text-[13px]">{t("announcements.notice")}</p>
+			)}
 			<div className="flex justify-end gap-2">
 				{onDone && (
 					<button type="button" className={buttonClass("outline")} onClick={onDone}>
@@ -141,6 +193,12 @@ function AnnouncementForm({
 export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 	const { t, language } = useI18n();
 	const queryClient = useQueryClient();
+	const watch = useRecordsViews();
+	const [activityFor, setActivityFor] = useState<number | null>(null);
+	const respond = useMutation({
+		mutationFn: (id: number) => api(`/announcements/${id}/respond`, { method: "POST" }),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY_KEY }),
+	});
 	const [filter, setFilter] = useState<(typeof FILTERS)[number]>("all");
 	const [editing, setEditing] = useState<Announcement | null>(null);
 	const [deleting, setDeleting] = useState<Announcement | null>(null);
@@ -174,31 +232,21 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 
 	return (
 		<div className="mx-auto max-w-[1180px] p-4 md:px-6 md:py-7">
-			<h1 className="text-[26px] font-semibold leading-[34px] tracking-tight">
-				{t("nav.announcements")}
-			</h1>
-			<div className="mt-4 flex flex-wrap items-start gap-6">
+			<div className="flex flex-wrap items-start gap-6">
 				<div className="min-w-0 flex-[999_1_480px]">
-					<div
-						role="group"
-						aria-label={t("announcements.priority")}
-						className="flex flex-wrap gap-1.5"
-					>
-						{FILTERS.map((option) => (
-							<button
-								key={option}
-								type="button"
-								aria-pressed={filter === option}
-								onClick={() => setFilter(option)}
-								className={`rounded-full border px-3 py-1 text-[13px] font-medium ${
-									filter === option
-										? "border-transparent bg-foreground text-background"
-										: "border-border bg-card text-foreground hover:bg-muted"
-								}`}
-							>
-								{t(`announcements.${option}`)} · {countOf(option)}
-							</button>
-						))}
+					<div className="flex flex-wrap items-center justify-between gap-3">
+						<h1 className="text-[26px] font-semibold leading-[34px] tracking-tight">
+							{t("nav.announcements")}
+						</h1>
+						<Segmented
+							label={t("announcements.priority")}
+							options={FILTERS.map((option) => ({
+								value: option,
+								label: `${t(`announcements.${option}`)} · ${countOf(option)}`,
+							}))}
+							value={filter}
+							onChange={setFilter}
+						/>
 					</div>
 					{visible.length === 0 ? (
 						<StatePanel
@@ -217,10 +265,18 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 					) : (
 						<ul className="mt-4 flex flex-col gap-3">
 							{visible.map((item) => (
-								<li key={item.id} className="rounded-card border border-border bg-card p-4 md:p-5">
+								<li
+									key={item.id}
+									data-announcement-id={item.id}
+									ref={watch}
+									className={`rounded-card bg-card p-4 md:p-5 ${
+										item.priority === "urgent" ? "border-2 border-destructive" : "border border-border"
+									}`}
+								>
 									<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
 										<PriorityBadge priority={item.priority} />
 										<span className="min-w-0 flex-1">
+											{item.priority === "urgent" && `${t("announcements.pinned")} · `}
 											{item.authorName && `${item.authorName} · `}
 											{new Date(item.createdAt).toLocaleDateString(language, {
 												dateStyle: "medium",
@@ -231,7 +287,7 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 												<button
 													type="button"
 													aria-label={`${t("common.edit")}: ${item.title}`}
-													className={buttonClass("outline", "min-h-[30px] px-2.5 py-0 text-xs font-medium")}
+													className={buttonClass("outline", BUTTON_SMALL)}
 													onClick={() => setEditing(item)}
 												>
 													{t("common.edit")}
@@ -239,19 +295,46 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 												<button
 													type="button"
 													aria-label={`${t("common.delete")}: ${item.title}`}
-													className="min-h-[30px] rounded-md px-2.5 text-xs font-medium text-danger-foreground hover:bg-danger-surface"
+													className={buttonClass("dangerGhost", BUTTON_SMALL)}
 													onClick={() => {
 														remove.reset();
 														setDeleting(item);
 													}}
 												>
-													{t("common.delete")}
+													{t("common.delete")}…
 												</button>
 											</span>
 										)}
 									</div>
-									<h2 className="mt-2 break-words text-base font-semibold">{item.title}</h2>
+									<h2 className="mt-2 break-words text-[17px] font-semibold">{item.title}</h2>
 									<p className="mt-1 whitespace-pre-wrap break-words">{item.content}</p>
+									<div className="mt-3 flex flex-wrap items-center gap-3">
+										{item.responded ? (
+											<span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-[#14795A] dark:text-[#4CC9A0]">
+												<Check size={15} aria-hidden="true" />
+												{t("announcements.got_it_done")}
+											</span>
+										) : (
+											<button
+												type="button"
+												disabled={respond.isPending}
+												aria-label={`${t("announcements.got_it")}: ${item.title}`}
+												className={buttonClass("outline", BUTTON_SMALL)}
+												onClick={() => respond.mutate(item.id)}
+											>
+												{t("announcements.got_it")}
+											</button>
+										)}
+										{canManage && item.viewers !== undefined && (
+											<button
+												type="button"
+												className="text-[13px] text-muted-foreground hover:underline"
+												onClick={() => setActivityFor(item.id)}
+											>
+												{t("announcements.stats", { viewers: item.viewers, responses: item.responses ?? 0 })}
+											</button>
+										)}
+									</div>
 								</li>
 							))}
 						</ul>
@@ -265,6 +348,13 @@ export function AnnouncementsPage({ canManage }: { canManage: boolean }) {
 				)}
 			</div>
 
+			{activityFor !== null && (
+				<ActivityDialog
+					path={`/reports/announcements/${activityFor}/people`}
+					kind="announcement"
+					onClose={() => setActivityFor(null)}
+				/>
+			)}
 			<Modal
 				title={t("announcements.edit")}
 				open={editing !== null}

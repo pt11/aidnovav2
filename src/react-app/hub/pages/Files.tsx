@@ -12,13 +12,13 @@ import {
 	Lock,
 	Music,
 	Plus,
-	Search,
 	Trash2,
 } from "lucide-react";
 import { Link, useSearch } from "wouter";
 import { api, ApiError, useDepartments } from "../api";
 import { useI18n } from "../i18n";
 import {
+	SearchField,
 	ActionsMenu,
 	Alert,
 	buttonClass,
@@ -28,9 +28,11 @@ import {
 	PageError,
 	PageHeader,
 	PageLoading,
+	Segmented,
 	SelectField,
 	StatePanel,
 } from "../ui";
+import { ActivityDialog } from "./Reports";
 
 interface FolderItem {
 	id: number;
@@ -606,7 +608,7 @@ function FileLinks({ file, unlock }: { file: FileItem; unlock?: string }) {
 	const { t } = useI18n();
 	const suffix = unlock ? `?unlock=${encodeURIComponent(unlock)}` : "";
 	const previewSuffix = unlock ? `${suffix}&inline=1` : "?inline=1";
-	const actionClass = buttonClass("outline", "min-h-9 px-3");
+	const actionClass = buttonClass("outline");
 	return (
 		<>
 			{file.canPreview && (
@@ -663,7 +665,7 @@ function UnlockModal({
 			<div className="flex flex-col gap-4">
 				<p className="text-sm text-muted-foreground">{t("files.unlocked")}</p>
 				<div className="flex flex-wrap justify-end gap-2">
-					<button type="button" className={buttonClass("ghost", "min-h-9 px-3")} onClick={onClose}>
+					<button type="button" className={buttonClass("ghost")} onClick={onClose}>
 						{t("common.close")}
 					</button>
 					{file.fileType === "link" ? (
@@ -672,7 +674,7 @@ function UnlockModal({
 								href={link.data.url}
 								target="_blank"
 								rel="noopener noreferrer"
-								className={buttonClass("outline", "min-h-9 px-3")}
+								className={buttonClass("outline")}
 							>
 								{t("files.open_link")}
 							</a>
@@ -772,11 +774,13 @@ function FileRow({
 						: []),
 					{ label: t("files.download"), href: `/api/files/${file.id}/download` },
 				];
+	const [showActivity, setShowActivity] = useState(false);
 	const actions = [
 		...open,
 		...(canManage
 			? [
-					{ label: t("common.edit"), onSelect: onEdit, separated: true },
+					{ label: t("reports.who_viewed"), onSelect: () => setShowActivity(true), separated: true },
+					{ label: t("common.edit"), onSelect: onEdit },
 					{ label: t("common.delete"), onSelect: onDelete, danger: true, separated: true },
 				]
 			: []),
@@ -806,6 +810,9 @@ function FileRow({
 					.join(" · ")}
 			</p>
 			<ActionsMenu label={t("files.actions_for", { name: file.name })} actions={actions} />
+			{showActivity && (
+				<ActivityDialog path={`/reports/files/${file.id}/people`} kind="file" onClose={() => setShowActivity(false)} />
+			)}
 		</li>
 	);
 }
@@ -968,38 +975,16 @@ export function FilesPage({ canManage }: { canManage: boolean }) {
 
 			{(files.data.length > 0 || folders.data.length > 0) && (
 				<div className="mt-5 flex flex-wrap items-center gap-2">
-					<div className="relative min-w-52 flex-1">
-						<Search
-							size={15}
-							aria-hidden="true"
-							className="pointer-events-none absolute top-3 left-3 text-muted-foreground"
-						/>
-						<input
-							type="search"
-							aria-label={t("files.search")}
-							placeholder={t("files.search")}
-							value={query}
-							onChange={(event) => setQuery(event.target.value)}
-							className="min-h-10 w-full rounded-md border border-input bg-card py-2 pr-3 pl-9 text-sm"
-						/>
-					</div>
-					<div role="group" aria-label={t("files.col_type")} className="flex flex-wrap gap-1">
-						{FILTERS.map((option) => (
-							<button
-								key={option}
-								type="button"
-								aria-pressed={filter === option}
-								onClick={() => setFilter(option)}
-								className={`rounded-full px-3 py-1 text-xs font-medium ${
-									filter === option
-										? "bg-selected text-selected-foreground"
-										: "text-muted-foreground hover:bg-muted"
-								}`}
-							>
-								{t(`files.filter_${option}`)}
-							</button>
-						))}
-					</div>
+					<SearchField label={t("files.search")} value={query} onChange={setQuery} className="min-w-52 flex-1" />
+					<Segmented
+						label={t("files.col_type")}
+						options={FILTERS.map((option) => ({
+							value: option,
+							label: t(`files.filter_${option}`),
+						}))}
+						value={filter}
+						onChange={setFilter}
+					/>
 				</div>
 			)}
 

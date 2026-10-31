@@ -164,7 +164,7 @@ export function LessonEditorPage({ id, lessonId }: { id: string; lessonId: strin
 						{t("common.unsaved")}
 					</span>
 				)}
-				<Link href={`${base}/lessons/${lessonId}`} className={buttonClass("outline", "min-h-9 py-0")}>
+				<Link href={`${base}/lessons/${lessonId}`} className={buttonClass("outline")}>
 					{t("course.preview_staff")}
 				</Link>
 			</header>

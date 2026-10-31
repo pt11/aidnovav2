@@ -13,6 +13,7 @@ export interface SessionUser {
 	name: string;
 	email: string;
 	isSuperAdmin: boolean;
+	twoFactorEnabled: boolean;
 }
 
 export interface Membership {
@@ -20,6 +21,7 @@ export interface Membership {
 	name: string;
 	slug: string;
 	logoUrl: string | null;
+	photoKey: string | null;
 	ownerId: string;
 	role: Role;
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
@@ -76,6 +78,8 @@ export const requireUser = createMiddleware<AppEnv>(async (c, next) => {
 		name: session.user.name,
 		email: session.user.email,
 		isSuperAdmin: session.user.isSuperAdmin === true,
+		twoFactorEnabled:
+			(session.user as { twoFactorEnabled?: boolean | null }).twoFactorEnabled === true,
 	});
 	await next();
 });
@@ -87,6 +91,7 @@ export function getMemberships(db: Db, userId: string): Promise<Membership[]> {
 			name: organizations.name,
 			slug: organizations.slug,
 			logoUrl: organizations.logoUrl,
+			photoKey: userProfiles.photoKey,
 			ownerId: organizations.ownerId,
 			role: userProfiles.role,
 			subscriptionStatus: organizations.subscriptionStatus,

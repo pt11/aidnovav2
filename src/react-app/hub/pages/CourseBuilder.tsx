@@ -18,7 +18,6 @@ import {
 	ListChecks,
 	Pencil,
 	Plus,
-	Search,
 	UploadCloud,
 	Video,
 	X,
@@ -27,6 +26,9 @@ import { Link, useLocation } from "wouter";
 import { api, ApiError } from "../api";
 import { useI18n } from "../i18n";
 import {
+	Chip,
+	SearchField,
+	BUTTON_SMALL,
 	ActionsMenu,
 	Alert,
 	buttonClass,
@@ -613,17 +615,7 @@ function HubPicker({
 		<Modal title={t("course.hub_title")} description={t("course.hub_desc")} open wide onClose={() => onClose(false)}>
 			<div className="flex flex-col gap-3">
 				{add.isError && <Alert>{t("error.generic")}</Alert>}
-				<label className="flex h-9 items-center gap-2 rounded-md border border-input bg-card px-2.5">
-					<Search size={16} aria-hidden="true" className="text-muted-foreground" />
-					<input
-						type="search"
-						aria-label={t("course.hub_search")}
-						placeholder={t("course.hub_search")}
-						value={search}
-						onChange={(event) => setSearch(event.target.value)}
-						className="min-w-0 flex-1 bg-transparent outline-none"
-					/>
-				</label>
+				<SearchField label={t("course.hub_search")} value={search} onChange={setSearch} />
 				{files.isPending && <PageLoading />}
 				{files.isError && <PageError onRetry={() => files.refetch()} />}
 				{files.data && visible.length === 0 && (
@@ -869,10 +861,10 @@ export function Materials({
 							<p className="text-xs text-muted-foreground">{t("course.drop_hint")}</p>
 						</div>
 						<div className="flex flex-wrap gap-2">
-							<button type="button" className={buttonClass("outline", "min-h-9 py-0 text-[13px]")} onClick={() => input.current?.click()}>
+							<button type="button" className={buttonClass("outline")} onClick={() => input.current?.click()}>
 								{t("course.upload")}
 							</button>
-							<button type="button" className={buttonClass("outline", "min-h-9 py-0 text-[13px]")} onClick={() => setPicking(true)}>
+							<button type="button" className={buttonClass("outline")} onClick={() => setPicking(true)}>
 								{t("course.choose_hub")}
 							</button>
 						</div>
@@ -959,13 +951,13 @@ export function Materials({
 							)}
 						</span>
 						{transfer.status === "uploading" && transfer.cancel ? (
-							<button type="button" className={buttonClass("outline", "min-h-[30px] px-2.5 py-0 text-xs")} onClick={transfer.cancel}>
+							<button type="button" className={buttonClass("outline", BUTTON_SMALL)} onClick={transfer.cancel}>
 								{t("common.cancel")}
 							</button>
 						) : transfer.status === "failed" ? (
 							<button
 								type="button"
-								className={buttonClass("outline", "min-h-[30px] px-2.5 py-0 text-xs")}
+								className={buttonClass("outline", BUTTON_SMALL)}
 								onClick={() => {
 									dropTransfer(transfer.id);
 									input.current?.click();
@@ -983,15 +975,15 @@ export function Materials({
 			</ul>
 			{compact && (
 				<div className="mt-3 flex flex-wrap gap-2">
-					<button type="button" className={buttonClass("outline", "min-h-9 py-0 text-[13px]")} onClick={() => input.current?.click()}>
+					<button type="button" className={buttonClass("outline")} onClick={() => input.current?.click()}>
 						{t("course.upload_slides")}
 					</button>
 					{onAddVideo && (
-						<button type="button" className={buttonClass("outline", "min-h-9 py-0 text-[13px]")} onClick={onAddVideo}>
+						<button type="button" className={buttonClass("outline")} onClick={onAddVideo}>
 							{t("course.add_video_link")}
 						</button>
 					)}
-					<button type="button" className={buttonClass("outline", "min-h-9 py-0 text-[13px]")} onClick={() => setPicking(true)}>
+					<button type="button" className={buttonClass("outline")} onClick={() => setPicking(true)}>
 						{t("course.choose_hub")}
 					</button>
 				</div>
@@ -1112,7 +1104,7 @@ function LessonPanel({
 					{save.isSuccess && !dirty && (
 						<span role="status" className="text-[13px] text-muted-foreground">{t("common.saved")}</span>
 					)}
-					<button type="submit" disabled={save.isPending || !dirty} className={buttonClass("primary", "min-h-9 py-0")}>
+					<button type="submit" disabled={save.isPending || !dirty} className={buttonClass()}>
 						{t("course.save_lesson")}
 					</button>
 				</div>
@@ -1311,7 +1303,7 @@ function SettingsPanel({ course }: { course: ManagedCourse }) {
 					<option value="no">{t("course.certificate_none")}</option>
 				</SelectField>
 				<div className="flex items-center gap-3">
-					<button type="submit" disabled={save.isPending} className={buttonClass("outline", "min-h-9 py-0")}>
+					<button type="submit" disabled={save.isPending} className={buttonClass("outline")}>
 						{t("common.save")}
 					</button>
 					{save.isSuccess && <span role="status" className="text-[13px] text-muted-foreground">{t("common.saved")}</span>}
@@ -1322,7 +1314,7 @@ function SettingsPanel({ course }: { course: ManagedCourse }) {
 				<p className="mb-2.5 mt-1.5 text-[13px] text-muted-foreground">{t("course.delete_desc")}</p>
 				<button
 					type="button"
-					className="min-h-8 rounded-md border border-destructive px-3 text-[13px] font-medium text-danger-foreground hover:bg-danger-surface"
+					className={buttonClass("dangerOutline", BUTTON_SMALL)}
 					onClick={() => setDeleting(true)}
 				>
 					{t("course.delete")}…
@@ -1401,19 +1393,17 @@ export function CourseBuilderPage({ id, lessonId }: { id: string; lessonId?: str
 					<p className="text-xs text-muted-foreground">{t("nav.courses")}</p>
 					<div className="flex flex-wrap items-center gap-2">
 						<h1 className="min-w-0 break-words text-lg font-semibold">{data.title}</h1>
-						<span className={`rounded-full px-2 py-px text-[11px] font-semibold ${published ? "bg-primary text-primary-foreground" : "border border-input"}`}>
-							{t(published ? "policies.published" : "policies.draft")}
-						</span>
+						<Chip tone={published ? "primary" : "outline"}>{t(published ? "policies.published" : "policies.draft")}</Chip>
 						<IconButton label={t("course.edit_details")} onClick={() => setEditing(true)}>
 							<Pencil size={14} aria-hidden="true" />
 						</IconButton>
 					</div>
 				</div>
 				<div className="flex flex-wrap gap-2">
-					<Link href={`/courses/${id}`} className={buttonClass("outline", "min-h-9 py-0")}>
+					<Link href={`/courses/${id}`} className={buttonClass("outline")}>
 						{t("course.preview")}
 					</Link>
-					<Link href={`/courses/${id}/learners`} className={buttonClass("outline", "min-h-9 py-0")}>
+					<Link href={`/courses/${id}/learners`} className={buttonClass("outline")}>
 						{t("course.assign")}
 					</Link>
 					<button
@@ -1539,14 +1529,7 @@ function AssignDialog({
 			<div className="flex flex-col gap-3">
 				{assign.isError && <Alert>{t("error.generic")}</Alert>}
 				<div className="flex flex-wrap gap-2">
-					<input
-						type="search"
-						aria-label={t("course.assign_search")}
-						placeholder={t("course.assign_search")}
-						value={search}
-						onChange={(event) => setSearch(event.target.value)}
-						className="min-h-9 min-w-48 flex-1 rounded-md border border-input bg-card px-3"
-					/>
+					<SearchField label={t("course.assign_search")} value={search} onChange={setSearch} className="min-w-48 flex-1" />
 					{departments.length > 0 && (
 						<select
 							aria-label={t("departments.title")}
@@ -1563,7 +1546,7 @@ function AssignDialog({
 					<button
 						type="button"
 						disabled={visible.length === 0}
-						className={buttonClass("outline", "min-h-9 py-0")}
+						className={buttonClass("outline")}
 						onClick={() =>
 							setSelected((current) => [...new Set([...current, ...visible.map((member) => member.id)])])
 						}
@@ -1649,7 +1632,7 @@ export function CourseLearnersPage({ id }: { id: string }) {
 					<p className="break-words text-muted-foreground">{data.title}</p>
 				</div>
 				{!data.isMandatory && (
-					<button type="button" className={buttonClass("primary", "min-h-9 py-0")} onClick={() => setAssigning(true)}>
+					<button type="button" className={buttonClass()} onClick={() => setAssigning(true)}>
 						{t("course.assign")}
 					</button>
 				)}

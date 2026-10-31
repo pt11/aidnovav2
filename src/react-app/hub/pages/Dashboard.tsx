@@ -13,10 +13,10 @@ import {
 	UserPlus,
 	type LucideIcon,
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { api, type Me } from "../api";
 import { useI18n } from "../i18n";
-import { buttonClass, PageError, PageLoading } from "../ui";
+import { ActionsMenu, Avatar, BUTTON_SMALL, buttonClass, Chip, PageError, PageLoading } from "../ui";
 import { PriorityBadge, type Priority } from "./Announcements";
 
 interface ManagerData {
@@ -28,6 +28,15 @@ interface ManagerData {
 		behind: { id: number; title: string; pending: number }[];
 	};
 	membersWithoutDepartment: number;
+	joinedThisMonth: number;
+	courses: {
+		enrolled: number;
+		completed: number;
+		publishedCourses: number;
+		draftCourses: { id: number; title: string; updatedAt: string }[];
+		certificates: number;
+		lastCertificate: { courseTitle: string; issuedAt: string } | null;
+	};
 	draftPolicies: { id: number; title: string }[];
 	reviewDue: { id: number; title: string; reviewDate: string }[];
 	activity: {
@@ -58,10 +67,12 @@ function ProgressBar({
 	percent,
 	label,
 	low = false,
+	violet = false,
 }: {
 	percent: number;
 	label: string;
 	low?: boolean;
+	violet?: boolean;
 }) {
 	return (
 		<div
@@ -73,7 +84,7 @@ function ProgressBar({
 			className="h-1.5 overflow-hidden rounded-full bg-muted"
 		>
 			<div
-				className={`h-full rounded-full ${low ? "bg-destructive" : "bg-primary"}`}
+				className={`h-full rounded-full ${low ? "bg-destructive" : violet ? "bg-[#753FF3]" : "bg-primary"}`}
 				style={{ width: `${percent}%` }}
 			/>
 		</div>
@@ -142,7 +153,7 @@ function AttentionRow({
 				href={href}
 				className={buttonClass(
 					primary ? "primary" : "outline",
-					"min-h-8 px-3 py-0 text-[13px] font-medium",
+					BUTTON_SMALL,
 				)}
 			>
 				{action}
@@ -251,19 +262,9 @@ function relativeTime(value: string, now: number, language: string) {
 	return format.format(Math.round(hours / 24), "day");
 }
 
-function initials(name: string) {
-	return (
-		name
-			.split(/\s+/)
-			.slice(0, 2)
-			.map((word) => word[0] ?? "")
-			.join("")
-			.toUpperCase() || "A"
-	);
-}
-
 export function DashboardPage({ me }: { me: Me }) {
 	const { t, language } = useI18n();
+	const [, navigate] = useLocation();
 	const [now] = useState(() => Date.now());
 	const dashboard = useQuery({
 		queryKey: ["dashboard"],
@@ -288,16 +289,29 @@ export function DashboardPage({ me }: { me: Me }) {
 	const compliancePercent = compliance
 		? percentOf(compliance.acknowledged, compliance.required)
 		: 0;
+	const coursePercent = manager ? percentOf(manager.courses.completed, manager.courses.enrolled) : 0;
 	const noPeopleYet = !!manager && data.members <= 1 && data.invitations === 0;
 	const noDepartmentsYet = !!manager && data.departments === 0;
 	const needsAttention =
 		!!manager &&
 		(manager.compliance.behind.length > 0 ||
 			manager.membersWithoutDepartment > 0 ||
-			manager.draftPolicies.length > 0 ||
+							manager.draftPolicies.length > 0 ||
+				manager.courses.draftCourses.length > 0 ||
+
 			manager.reviewDue.length > 0 ||
 			noPeopleYet ||
 			noDepartmentsYet);
+
+	const attentionCount = manager
+		? manager.compliance.behind.length +
+			(manager.membersWithoutDepartment > 0 && data.departments > 0 ? 1 : 0) +
+			(noDepartmentsYet ? 1 : 0) +
+			(noPeopleYet ? 1 : 0) +
+			manager.draftPolicies.length +
+			manager.courses.draftCourses.length +
+			manager.reviewDue.length
+		: 0;
 
 	return (
 		<div className="mx-auto flex max-w-[1180px] flex-col gap-5 p-4 md:px-6 md:py-7">
@@ -316,22 +330,25 @@ export function DashboardPage({ me }: { me: Me }) {
 				</div>
 				{manager && (
 					<div className="flex flex-wrap gap-2">
-						<Link href="/" className={buttonClass("outline", "min-h-9 py-0 font-medium")}>
+						<Link href="/" className={buttonClass("outline")}>
 							{t("dashboard.post_announcement")}
 						</Link>
-						<Link
-							href="/policies"
-							className={buttonClass("primary", "min-h-9 py-0 font-medium")}
-						>
-							<Plus size={16} aria-hidden="true" />
-							{t("dashboard.new_policy")}
-						</Link>
+						<ActionsMenu
+							label={t("dashboard.create")}
+							triggerLabel={t("dashboard.create")}
+							triggerIcon={<Plus size={16} aria-hidden="true" />}
+							actions={[
+								{ label: t("policies.new"), onSelect: () => navigate("/policies/new") },
+								{ label: t("course.new"), onSelect: () => navigate("/courses") },
+								{ label: t("users.add_staff"), onSelect: () => navigate("/users") },
+							]}
+						/>
 					</div>
 				)}
 			</div>
 
 			{manager && compliance && (
-				<dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+				<dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
 					<Kpi
 						label={t("dashboard.kpi_compliance")}
 						value={compliance.required ? `${compliancePercent}%` : "—"}
@@ -354,12 +371,39 @@ export function DashboardPage({ me }: { me: Me }) {
 							/>
 						)}
 					</Kpi>
+										<Kpi
+						label={t("dashboard.kpi_courses")}
+						value={manager.courses.enrolled ? `${coursePercent}%` : "—"}
+						detail={
+							manager.courses.enrolled
+								? t("dashboard.kpi_courses_count", {
+										done: manager.courses.completed,
+										total: manager.courses.enrolled,
+									})
+								: undefined
+						}
+						footnote={t("dashboard.kpi_courses_note", { count: manager.courses.publishedCourses })}
+					>
+						{manager.courses.enrolled > 0 && (
+							<ProgressBar percent={coursePercent} label={t("dashboard.kpi_courses")} violet />
+						)}
+					</Kpi>
 					<Kpi
 						label={t("dashboard.members")}
 						value={data.members}
 						detail={t("dashboard.in_departments", { count: data.departments })}
+						footnote={t("dashboard.kpi_joined", { count: manager.joinedThisMonth })}
 					/>
-					<Kpi label={t("dashboard.invitations")} value={data.invitations} />
+					<Kpi
+						label={t("dashboard.kpi_certificates")}
+						value={manager.courses.certificates}
+						detail={t("dashboard.this_year")}
+						footnote={
+							manager.courses.lastCertificate
+								? t("dashboard.kpi_last_certificate", { title: manager.courses.lastCertificate.courseTitle })
+								: t("dashboard.kpi_no_certificates")
+						}
+					/>
 				</dl>
 			)}
 
@@ -368,20 +412,20 @@ export function DashboardPage({ me }: { me: Me }) {
 					{data.pendingPolicies.length + data.pendingCourses.length > 0 && (
 						<ToDoCard policies={data.pendingPolicies} courses={data.pendingCourses} />
 					)}
-
 					{manager && needsAttention && (
 						<section className="rounded-card border border-border bg-card">
-							<div className="border-b border-border px-5 py-4">
+							<div className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
 								<h2 className="text-base font-semibold">{t("dashboard.attention")}</h2>
+								<Chip tone="neutral">{t("dashboard.items", { count: attentionCount })}</Chip>
 							</div>
 							<ul>
-								{manager.compliance.behind.map((policy) => (
+								{manager.compliance.behind.map((policy, index) => (
 									<AttentionRow
 										key={`behind-${policy.id}`}
 										icon={CircleAlert}
 										urgent
-										primary
-										title={t("dashboard.attention_behind", {
+										primary={index === 0}
+																				title={t("dashboard.attention_behind", {
 											count: policy.pending,
 											title: policy.title,
 										})}
@@ -393,7 +437,7 @@ export function DashboardPage({ me }: { me: Me }) {
 								{manager.membersWithoutDepartment > 0 && data.departments > 0 && (
 									<AttentionRow
 										icon={UserPlus}
-										title={t("dashboard.attention_no_department", {
+										title={t(manager.membersWithoutDepartment === 1 ? "dashboard.attention_no_department_one" : "dashboard.attention_no_department", {
 											count: manager.membersWithoutDepartment,
 										})}
 										detail={t("dashboard.attention_no_department_detail")}
@@ -429,6 +473,16 @@ export function DashboardPage({ me }: { me: Me }) {
 										href={`/policies/${policy.id}`}
 									/>
 								))}
+								{manager.courses.draftCourses.map((course) => (
+									<AttentionRow
+										key={`course-${course.id}`}
+										icon={GraduationCap}
+										title={t("dashboard.attention_course_draft", { title: course.title })}
+										detail={t("dashboard.attention_course_draft_detail")}
+										action={t("dashboard.attention_review")}
+										href={`/courses/${course.id}/manage`}
+									/>
+								))}
 								{manager.reviewDue.map((policy) => (
 									<AttentionRow
 										key={`review-${policy.id}`}
@@ -447,41 +501,10 @@ export function DashboardPage({ me }: { me: Me }) {
 							</ul>
 						</section>
 					)}
-
-					<SectionCard
-						title={t("dashboard.recent")}
-						linkLabel={t("dashboard.view_all")}
-						href="/"
-					>
-						{data.recent.length === 0 ? (
-							<p className="flex items-center gap-3 text-muted-foreground">
-								<Megaphone size={18} aria-hidden="true" />
-								{t("announcements.empty_title")}
-							</p>
-						) : (
-							<ul className="flex flex-col gap-2.5">
-								{data.recent.map((item) => (
-									<li key={item.id} className="rounded-[9px] border border-border p-3">
-										<div className="flex items-start justify-between gap-2">
-											<span className="min-w-0 break-words font-semibold">{item.title}</span>
-											{item.priority !== "normal" && (
-												<PriorityBadge priority={item.priority} />
-											)}
-										</div>
-										<p className="text-[13px] text-muted-foreground">
-											{relativeTime(item.createdAt, now, language)}
-										</p>
-									</li>
-								))}
-							</ul>
-						)}
-					</SectionCard>
 				</div>
-
-				{manager && (
-					<div className="flex min-w-0 flex-[1_1_300px] flex-col gap-4">
-						{manager.compliance.departments.length > 0 && (
-							<SectionCard title={t("dashboard.compliance_by_department")}>
+				{manager && manager.compliance.departments.length > 0 && (
+					<div className="min-w-0 flex-[1_1_300px]">
+						<SectionCard title={t("dashboard.compliance_by_department")}>
 								<ul className="flex flex-col gap-2.5 text-[13px]">
 									{manager.compliance.departments.map((department) => (
 										<li key={department.name}>
@@ -500,7 +523,12 @@ export function DashboardPage({ me }: { me: Me }) {
 									))}
 								</ul>
 							</SectionCard>
-						)}
+					</div>
+				)}
+			</div>
+			<div className="flex flex-wrap items-start gap-4">
+				{manager && (
+					<div className="min-w-0 flex-[1_1_380px]">
 						<SectionCard title={t("dashboard.activity")}>
 							{manager.activity.length === 0 ? (
 								<p className="text-muted-foreground">{t("dashboard.activity_empty")}</p>
@@ -508,12 +536,7 @@ export function DashboardPage({ me }: { me: Me }) {
 								<ul className="flex flex-col gap-3">
 									{manager.activity.map((item) => (
 										<li key={item.key} className="flex items-start gap-2.5">
-											<span
-												aria-hidden="true"
-												className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground"
-											>
-												{initials(item.actor)}
-											</span>
+											<Avatar name={item.actor} size={28} />
 											<span className="min-w-0 flex-1 break-words">
 												{t(`dashboard.activity_${item.kind}`, {
 													name: item.actor,
@@ -530,6 +553,34 @@ export function DashboardPage({ me }: { me: Me }) {
 						</SectionCard>
 					</div>
 				)}
+				<div className="min-w-0 flex-[1_1_380px]">
+					<SectionCard
+						title={t("dashboard.recent")}
+						linkLabel={t("dashboard.view_all")}
+						href="/"
+					>
+						{data.recent.length === 0 ? (
+							<p className="flex items-center gap-3 text-muted-foreground">
+								<Megaphone size={18} aria-hidden="true" />
+								{t("announcements.empty_title")}
+							</p>
+						) : (
+							<ul className="flex flex-col gap-2.5">
+								{data.recent.map((item) => (
+									<li key={item.id} className="rounded-[9px] border border-border p-3">
+										<div className="flex items-start justify-between gap-2">
+											<span className="min-w-0 break-words font-semibold">{item.title}</span>
+											<PriorityBadge priority={item.priority} />
+										</div>
+										<p className="text-[13px] text-muted-foreground">
+											{relativeTime(item.createdAt, now, language)}
+										</p>
+									</li>
+								))}
+							</ul>
+						)}
+					</SectionCard>
+				</div>
 			</div>
 		</div>
 	);

@@ -30,7 +30,63 @@ function messageKey(error: AuthError): string {
 	return "error.generic";
 }
 
+function TwoStepForm({ onDone }: { onDone: () => Promise<void> }) {
+	const { t } = useI18n();
+	const [useBackup, setUseBackup] = useState(false);
+	const [code, setCode] = useState("");
+	const [error, setError] = useState("");
+	const [saving, setSaving] = useState(false);
+
+	async function submit(event: FormEvent) {
+		event.preventDefault();
+		setSaving(true);
+		setError("");
+		const result = useBackup
+			? await authClient.twoFactor.verifyBackupCode({ code: code.trim() })
+			: await authClient.twoFactor.verifyTotp({ code: code.trim() });
+		setSaving(false);
+		if (result.error) {
+			setError(t(result.error.status === 429 ? "twofactor.too_many" : "twofactor.code_wrong"));
+			return;
+		}
+		await onDone();
+	}
+
+	return (
+		<AuthCard title={t("twofactor.title")} subtitle={t(useBackup ? "twofactor.enter_backup" : "twofactor.enter_code")}>
+			<form onSubmit={submit} className="flex flex-col gap-3.5">
+				{error && <Alert>{error}</Alert>}
+				<Field
+					label={t(useBackup ? "twofactor.backup_code" : "twofactor.code")}
+					autoFocus
+					required
+					inputMode={useBackup ? "text" : "numeric"}
+					autoComplete="one-time-code"
+					maxLength={useBackup ? 30 : 6}
+					value={code}
+					onChange={(event) => setCode(event.target.value)}
+				/>
+				<button type="submit" disabled={saving} className={buttonClass()}>
+					{t("twofactor.verify")}
+				</button>
+				<button
+					type="button"
+					className="text-[13px] font-medium text-selected-foreground hover:underline"
+					onClick={() => {
+						setError("");
+						setCode("");
+						setUseBackup((current) => !current);
+					}}
+				>
+					{t(useBackup ? "twofactor.use_app" : "twofactor.use_backup")}
+				</button>
+			</form>
+		</AuthCard>
+	);
+}
+
 export function SignInPage() {
+	const [needsCode, setNeedsCode] = useState(false);
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [, navigate] = useLocation();
@@ -60,8 +116,23 @@ export function SignInPage() {
 			setError(t(messageKey(result.error)));
 			return;
 		}
+		if ((result.data as { twoFactorRedirect?: boolean } | null)?.twoFactorRedirect) {
+			setNeedsCode(true);
+			return;
+		}
 		if (next) navigate(next, { replace: true });
 		await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+	}
+
+	if (needsCode) {
+		return (
+			<TwoStepForm
+				onDone={async () => {
+					if (next) navigate(next, { replace: true });
+					await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+				}}
+			/>
+		);
 	}
 
 	async function resend() {

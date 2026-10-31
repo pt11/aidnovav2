@@ -1,3 +1,6 @@
+import { memberCourseStats } from "./courses";
+import { memberPolicyStats } from "./policies";
+import { memberPhotoUrl } from "./media";
 import { and, count, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import {
@@ -39,9 +42,10 @@ api.get("/me", requireUser, async (c) => {
 	return c.json({
 		user: currentUser,
 		activeOrganizationId: active?.organizationId ?? null,
-		memberships: memberships.map(({ ownerId: _ownerId, ...membership }) => ({
+		memberships: memberships.map(({ ownerId: _ownerId, photoKey, ...membership }) => ({
 			...membership,
-			access: getOrgAccess({ ...membership, ownerId: _ownerId }),
+			photoUrl: memberPhotoUrl(currentUser.id, photoKey),
+			access: getOrgAccess({ ...membership, photoKey, ownerId: _ownerId }),
 		})),
 	});
 });
@@ -143,6 +147,8 @@ api.get(
 				isActive: userProfiles.isActive,
 				departmentId: userProfiles.departmentId,
 				departmentName: departments.name,
+				photoKey: userProfiles.photoKey,
+				joinedAt: userProfiles.joinedAt,
 			})
 			.from(userProfiles)
 			.innerJoin(user, eq(userProfiles.userId, user.id))
@@ -155,7 +161,20 @@ api.get(
 			)
 			.where(eq(userProfiles.organizationId, c.get("org").organizationId))
 			.orderBy(user.name);
-		return c.json({ members, ownerId: c.get("org").ownerId });
+		const organizationId = c.get("org").organizationId;
+		const [policyStats, courseStats] = await Promise.all([
+			memberPolicyStats(c.get("db"), organizationId),
+			memberCourseStats(c.get("db"), organizationId),
+		]);
+		return c.json({
+			members: members.map(({ photoKey, ...member }) => ({
+				...member,
+				photoUrl: memberPhotoUrl(member.userId, photoKey),
+				policies: policyStats.get(member.userId) ?? { done: 0, total: 0 },
+				learning: courseStats.get(member.userId) ?? { total: 0, completed: 0 },
+			})),
+			ownerId: c.get("org").ownerId,
+		});
 	},
 );
 

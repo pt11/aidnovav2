@@ -5,6 +5,8 @@ import { Link, useLocation } from "wouter";
 import { api, ApiError } from "../api";
 import { useI18n } from "../i18n";
 import {
+	Chip,
+	SearchField,
 	Alert,
 	buttonClass,
 	Field,
@@ -12,6 +14,7 @@ import {
 	PageError,
 	PageHeader,
 	PageLoading,
+	Segmented,
 	StatePanel,
 	TextareaField,
 } from "../ui";
@@ -72,18 +75,6 @@ function ProgressBar({ percent, label }: { percent: number; label: string }) {
 	);
 }
 
-function Chip({ dark, children }: { dark?: boolean; children: string }) {
-	return (
-		<span
-			className={`rounded-full px-2 py-px text-xs font-semibold ${
-				dark ? "bg-[#030711] text-white" : "border border-input bg-white text-[#030711]"
-			}`}
-		>
-			{children}
-		</span>
-	);
-}
-
 function Cover({ course }: { course: CourseSummary }) {
 	const { t } = useI18n();
 	return (
@@ -97,8 +88,8 @@ function Cover({ course }: { course: CourseSummary }) {
 				/>
 			)}
 			<span className="relative flex flex-wrap gap-1.5">
-				<Chip>{t(course.status === "published" ? "policies.published" : "policies.draft")}</Chip>
-				{course.isMandatory && <Chip dark>{t("course.mandatory_chip")}</Chip>}
+				<Chip tone={course.status === "published" ? "primary" : "outline"}>{t(course.status === "published" ? "policies.published" : "policies.draft")}</Chip>
+				{course.isMandatory && <Chip tone="neutral">{t("course.mandatory_chip")}</Chip>}
 			</span>
 		</div>
 	);
@@ -170,7 +161,7 @@ function LearningCard({ course }: { course: LearningCourse }) {
 				)}
 				{course.isMandatory && (
 					<span className="relative">
-						<Chip dark>{t("course.mandatory_chip")}</Chip>
+						<Chip tone="neutral">{t("course.mandatory_chip")}</Chip>
 					</span>
 				)}
 			</div>
@@ -422,10 +413,6 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 		setSearch("");
 		setFilter("all");
 	};
-	const tabClass = (active: boolean) =>
-		`rounded px-3 py-1.5 text-[13px] font-medium ${
-			active ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-		}`;
 
 	return (
 		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
@@ -441,7 +428,7 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 				}
 				action={
 					canManage ? (
-						<button type="button" className={buttonClass("primary", "min-h-9 py-0")} onClick={() => setCreating(true)}>
+						<button type="button" className={buttonClass()} onClick={() => setCreating(true)}>
 							<Plus size={16} aria-hidden="true" />
 							{t("course.new")}
 						</button>
@@ -454,41 +441,25 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 				<>
 					<div className="flex flex-wrap items-center gap-2.5">
 						{canManage && (
-							<div role="group" aria-label={t("nav.courses")} className="inline-flex rounded-md border border-border bg-muted p-[3px]">
-								<button type="button" aria-pressed={tab === "manage"} className={tabClass(tab === "manage")} onClick={() => setTab("manage")}>
-									{t("course.tab_manage")}
-								</button>
-								<button type="button" aria-pressed={tab === "learning"} className={tabClass(tab === "learning")} onClick={() => setTab("learning")}>
-									{t("course.tab_learning")} · {learning.length}
-								</button>
-							</div>
+							<Segmented
+								label={t("nav.courses")}
+								options={[
+									{ value: "manage", label: t("course.tab_manage") },
+									{ value: "learning", label: `${t("course.tab_learning")} · ${learning.length}` },
+								]}
+								value={tab}
+								onChange={setTab}
+							/>
 						)}
 						{showManage && (
-							<div role="group" aria-label={t("course.filter")} className="inline-flex flex-wrap rounded-md border border-border bg-muted p-[3px]">
-								{filters.map((item) => (
-									<button
-										key={item.id}
-										type="button"
-										aria-pressed={filter === item.id}
-										className={tabClass(filter === item.id)}
-										onClick={() => setFilter(item.id)}
-									>
-										{item.label} · {item.total}
-									</button>
-								))}
-							</div>
-						)}
-						<label className="flex h-9 min-w-52 flex-1 items-center gap-2 rounded-md border border-input bg-card px-2.5">
-							<Search size={16} aria-hidden="true" className="text-muted-foreground" />
-							<input
-								type="search"
-								aria-label={t("course.search")}
-								placeholder={t("course.search")}
-								value={search}
-								onChange={(event) => setSearch(event.target.value)}
-								className="min-w-0 flex-1 bg-transparent outline-none"
+							<Segmented
+								label={t("course.filter")}
+								options={filters.map((item) => ({ value: item.id, label: `${item.label} · ${item.total}` }))}
+								value={filter}
+								onChange={setFilter}
 							/>
-						</label>
+						)}
+						<SearchField label={t("course.search")} value={search} onChange={setSearch} className="min-w-52 flex-1" />
 					</div>
 					{showManage && managed.length === 0 && (
 						<StatePanel

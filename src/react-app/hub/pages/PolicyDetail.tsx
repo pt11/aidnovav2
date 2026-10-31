@@ -262,7 +262,7 @@ export function PolicyDetailPage({
 	const policy = useQuery({
 		queryKey: key,
 		retry: false,
-		queryFn: () => api<Policy>(`/policies/${id}`),
+		queryFn: () => api<Policy>(`/policies/${id}?view=1`),
 	});
 	const refresh = () =>
 		Promise.all([

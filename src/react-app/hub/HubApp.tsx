@@ -30,6 +30,7 @@ import {
 	SettingsPlanPage,
 	SettingsProfilePage,
 	SettingsSecurityPage,
+	SettingsStaffSignInPage,
 } from "./pages/SettingsArea";
 import {
 	SuperOrganizationsPage,
@@ -48,6 +49,7 @@ import {
 import { CoursesPage } from "./pages/Courses";
 import { LessonEditorPage } from "./pages/LessonEditor";
 import { QuizBuilderPage } from "./pages/QuizBuilder";
+import { ReportsPage } from "./pages/Reports";
 import { UsersPage } from "./pages/Users";
 import { canManage, WorkspaceShell } from "./Shell";
 import { buttonClass, StartupScreen, StatePanel } from "./ui";
@@ -63,7 +65,11 @@ const queryClient = new QueryClient({
 });
 
 try {
-	if (localStorage.getItem("aidnova_theme") === "dark") {
+	const theme = localStorage.getItem("aidnova_theme");
+	if (
+		theme === "dark" ||
+		(theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+	) {
 		document.documentElement.classList.add("dark");
 	}
 } catch {
@@ -197,8 +203,6 @@ function BlockedPage({ me, org }: { me: Me; org: Membership }) {
 
 function Workspace({ me, org }: { me: Me; org: Membership }) {
 	const manager = canManage(org.role);
-	const managerRoute = (labelKey: string) =>
-		manager ? <LaterPage labelKey={labelKey} /> : <NoAccessPage />;
 
 	return (
 		<WorkspaceShell me={me} org={org}>
@@ -280,16 +284,19 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				<Route path="/settings/security">
 					<SettingsSecurityPage me={me} org={org} />
 				</Route>
+				<Route path="/settings/sign-in">
+					{org.role === "admin" ? <SettingsStaffSignInPage me={me} /> : <NoAccessPage />}
+				</Route>
 				<Route path="/settings/plan">
 					{manager ? <SettingsPlanPage org={org} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/settings/departments">
-					{manager ? <SettingsDepartmentsPage /> : <NoAccessPage />}
+					{manager ? <SettingsDepartmentsPage isAdmin={org.role === "admin"} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/users">
 					{manager ? <UsersPage me={me} role={org.role} /> : <NoAccessPage />}
 				</Route>
-				<Route path="/reports">{managerRoute("nav.reports")}</Route>
+				<Route path="/reports">{manager ? <ReportsPage /> : <NoAccessPage />}</Route>
 				<Route path="/settings">
 					{manager ? <SettingsGeneralPage org={org} /> : <NoAccessPage />}
 				</Route>

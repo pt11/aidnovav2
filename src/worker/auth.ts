@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { captcha } from "better-auth/plugins/captcha";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import { getDb } from "./db";
 import * as schema from "./db/schema";
 import { sendEmail } from "./email";
@@ -76,7 +77,10 @@ export function createAuth(env: Env, request: Request) {
 		secret: env.BETTER_AUTH_SECRET,
 		trustedOrigins: [baseURL],
 		database: drizzleAdapter(getDb(env), { provider: "sqlite", schema }),
-		plugins: turnstilePlugins(env),
+		plugins: [
+			...turnstilePlugins(env),
+			twoFactor({ issuer: "AidNova", backupCodeOptions: { amount: 10, length: 10 } }),
+		],
 		emailAndPassword: {
 			enabled: true,
 			requireEmailVerification: true,
@@ -102,6 +106,18 @@ export function createAuth(env: Env, request: Request) {
 			},
 		},
 		user: {
+			// Confirmed from the old address first, then from the new one, so a stolen
+			// session alone can't move an account to someone else's email.
+			changeEmail: {
+				enabled: true,
+				sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
+					await sendEmail(env, {
+						to: user.email,
+						subject: "Confirm changing your AidNova email",
+						text: `Someone asked to change your AidNova sign-in email to ${newEmail}.\n\nIf this was you, use this link to continue:\n\n${url}\n\nIf it wasn't, ignore this email and change your password.`,
+					});
+				},
+			},
 			additionalFields: {
 				isSuperAdmin: {
 					type: "boolean",

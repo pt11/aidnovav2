@@ -28,6 +28,7 @@ export const user = sqliteTable("user", {
 		.notNull()
 		.default(false),
 	image: text("image"),
+	twoFactorEnabled: integer("two_factor_enabled", { mode: "boolean" }).default(false),
 	isSuperAdmin: integer("is_super_admin", { mode: "boolean" })
 		.notNull()
 		.default(false),
@@ -37,6 +38,26 @@ export const user = sqliteTable("user", {
 		.notNull()
 		.default(sql`(unixepoch() * 1000)`),
 });
+
+// Better Auth's two-step sign-in. It encrypts the secret before storing it.
+export const twoFactor = sqliteTable(
+	"two_factor",
+	{
+		id: text("id").primaryKey(),
+		secret: text("secret").notNull(),
+		backupCodes: text("backup_codes").notNull(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		verified: integer("verified", { mode: "boolean" }).default(true),
+		failedVerificationCount: integer("failed_verification_count").default(0),
+		lockedUntil: integer("locked_until", { mode: "timestamp_ms" }),
+	},
+	(table) => [
+		index("two_factor_secret_idx").on(table.secret),
+		index("two_factor_user_idx").on(table.userId),
+	],
+);
 
 export const session = sqliteTable(
 	"session",
@@ -128,6 +149,9 @@ export const organizations = sqliteTable("organizations", {
 	name: text("name").notNull(),
 	slug: text("slug").notNull().unique(),
 	logoUrl: text("logo_url"),
+	logoKey: text("logo_key"),
+	logoType: text("logo_type"),
+	logoBytes: integer("logo_bytes"),
 	email: text("email"),
 	phone: text("phone"),
 	website: text("website"),
@@ -198,6 +222,11 @@ export const userProfiles = sqliteTable(
 		contactEmail: text("contact_email"),
 		viberLink: text("viber_link"),
 		facebookLink: text("facebook_link"),
+		photoKey: text("photo_key"),
+		photoType: text("photo_type"),
+		photoBytes: integer("photo_bytes"),
+		// Empty for people who joined before this was recorded.
+		joinedAt: integer("joined_at", { mode: "timestamp_ms" }).$defaultFn(() => new Date()),
 	},
 	(table) => [
 		index("user_profiles_org_idx").on(table.organizationId),
@@ -748,6 +777,34 @@ export const certificates = sqliteTable(
 	(table) => [
 		uniqueIndex("certificates_course_user").on(table.courseId, table.userId),
 		index("certificates_user_idx").on(table.userId),
+	],
+);
+
+// One row per person and item, so busy organizations don't grow a huge log.
+export const contentViews = sqliteTable(
+	"content_views",
+	{
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		targetType: text("target_type", { enum: ["policy", "announcement"] }).notNull(),
+		targetId: integer("target_id").notNull(),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		viewCount: integer("view_count").notNull().default(1),
+		firstViewedAt: integer("first_viewed_at", { mode: "timestamp_ms" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		lastViewedAt: integer("last_viewed_at", { mode: "timestamp_ms" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+		// When someone pressed "Got it" on an announcement.
+		respondedAt: integer("responded_at", { mode: "timestamp_ms" }),
+	},
+	(table) => [
+		primaryKey({ columns: [table.targetType, table.targetId, table.userId] }),
+		index("content_views_org_idx").on(table.organizationId, table.targetType),
 	],
 );
 

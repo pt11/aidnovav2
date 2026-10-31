@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, sql } from "drizzle-orm";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import type { Db } from "./db";
@@ -2275,6 +2275,7 @@ courseRoutes.get("/certificates/:id", requireUser, requireOrg, async (c) => {
 	}
 	return c.json({
 		id: certificate.id,
+		logoUrl: org.logoUrl,
 		recipientName: certificate.recipientName,
 		courseTitle: certificate.courseTitle,
 		organizationName: certificate.organizationName,
@@ -2308,4 +2309,90 @@ export async function pendingCoursesFor(db: Db, org: Membership, userId: string)
 			return !enrollment?.completedAt && (course.isMandatory || enrollment?.isAssigned);
 		})
 		.map(({ id, title }) => ({ id, title }));
+}
+
+// How many published courses each person has, and how many they've finished.
+export async function memberCourseStats(db: Db, organizationId: number) {
+	const [rows, enrollments, members] = await Promise.all([
+		db
+			.select({ id: courses.id, isMandatory: courses.isMandatory })
+			.from(courses)
+			.where(and(eq(courses.organizationId, organizationId), eq(courses.status, "published"))),
+		db
+			.select({
+				courseId: courseEnrollments.courseId,
+				userId: courseEnrollments.userId,
+				isAssigned: courseEnrollments.isAssigned,
+				completedAt: courseEnrollments.completedAt,
+			})
+			.from(courseEnrollments)
+			.innerJoin(courses, eq(courseEnrollments.courseId, courses.id))
+			.where(eq(courses.organizationId, organizationId)),
+		db
+			.select({ userId: userProfiles.userId })
+			.from(userProfiles)
+			.where(
+				and(eq(userProfiles.organizationId, organizationId), eq(userProfiles.isActive, true)),
+			),
+	]);
+	const byKey = new Map(enrollments.map((row) => [`${row.courseId}:${row.userId}`, row]));
+	const stats = new Map<string, { total: number; completed: number }>();
+	for (const member of members) {
+		const row = { total: 0, completed: 0 };
+		for (const course of rows) {
+			const enrollment = byKey.get(`${course.id}:${member.userId}`);
+			if (!course.isMandatory && !enrollment?.isAssigned) continue;
+			row.total++;
+			if (enrollment?.completedAt) row.completed++;
+		}
+		stats.set(member.userId, row);
+	}
+	return stats;
+}
+
+// The dashboard's learning numbers for managers.
+export async function courseOverview(db: Db, organizationId: number) {
+	const yearStart = new Date(new Date().getUTCFullYear(), 0, 1);
+	const [stats, published, drafts, [issued], [lastCertificate]] = await Promise.all([
+		memberCourseStats(db, organizationId),
+		db
+			.select({ total: count() })
+			.from(courses)
+			.where(and(eq(courses.organizationId, organizationId), eq(courses.status, "published"))),
+		db
+			.select({ id: courses.id, title: courses.title, updatedAt: courses.updatedAt })
+			.from(courses)
+			.where(and(eq(courses.organizationId, organizationId), eq(courses.status, "draft")))
+			.orderBy(desc(courses.updatedAt))
+			.limit(2),
+		db
+			.select({ total: count() })
+			.from(certificates)
+			.where(
+				and(
+					eq(certificates.organizationId, organizationId),
+					gt(certificates.issuedAt, yearStart),
+				),
+			),
+		db
+			.select({ courseTitle: certificates.courseTitle, issuedAt: certificates.issuedAt })
+			.from(certificates)
+			.where(eq(certificates.organizationId, organizationId))
+			.orderBy(desc(certificates.issuedAt))
+			.limit(1),
+	]);
+	let enrolled = 0;
+	let completed = 0;
+	for (const row of stats.values()) {
+		enrolled += row.total;
+		completed += row.completed;
+	}
+	return {
+		enrolled,
+		completed,
+		publishedCourses: published[0].total,
+		draftCourses: drafts,
+		certificates: issued.total,
+		lastCertificate: lastCertificate ?? null,
+	};
 }

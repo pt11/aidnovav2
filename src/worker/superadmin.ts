@@ -9,6 +9,7 @@ import {
 	policies,
 	session,
 	subscriptionPlans,
+	twoFactor,
 	upgradeRequests,
 	user,
 	userProfiles,
@@ -76,6 +77,8 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 		[storage],
 		[materialStorage],
 		[coverStorage],
+		[logoStorage],
+		[photoStorage],
 		requests,
 		trials,
 	] = await Promise.all([
@@ -101,6 +104,8 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 			.from(lessonMaterials)
 			.where(isNotNull(lessonMaterials.storageKey)),
 		db.select({ used: sum(courses.coverBytes) }).from(courses),
+		db.select({ used: sum(organizations.logoBytes) }).from(organizations),
+		db.select({ used: sum(userProfiles.photoBytes) }).from(userProfiles),
 		db
 			.select({
 				id: upgradeRequests.id,
@@ -156,7 +161,9 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 		storageUsed:
 			Number(storage.used ?? 0) +
 			Number(materialStorage.used ?? 0) +
-			Number(coverStorage.used ?? 0),
+			Number(coverStorage.used ?? 0) +
+			Number(logoStorage.used ?? 0) +
+			Number(photoStorage.used ?? 0),
 		requests,
 		trials,
 		plans: [...planTotals].map(([name, total]) => ({ name, total })),
@@ -165,7 +172,7 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 
 superadminRoutes.get("/superadmin/organizations", async (c) => {
 	const db = c.get("db");
-	const [rows, members, files, materials, covers, policyCounts, requests] = await Promise.all([
+	const [rows, members, files, materials, covers, photos, policyCounts, requests] = await Promise.all([
 		db
 			.select({
 				id: organizations.id,
@@ -182,6 +189,7 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 				planName: subscriptionPlans.name,
 				planMaxUsers: subscriptionPlans.maxUsers,
 				planStorageGb: subscriptionPlans.storageLimitGb,
+				logoBytes: organizations.logoBytes,
 				createdAt: organizations.createdAt,
 				ownerName: user.name,
 				ownerEmail: user.email,
@@ -219,6 +227,13 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 			.from(courses)
 			.groupBy(courses.organizationId),
 		db
+			.select({
+				organizationId: userProfiles.organizationId,
+				used: sum(userProfiles.photoBytes),
+			})
+			.from(userProfiles)
+			.groupBy(userProfiles.organizationId),
+		db
 			.select({ organizationId: policies.organizationId, total: count() })
 			.from(policies)
 			.groupBy(policies.organizationId),
@@ -241,6 +256,7 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 	const fileMap = new Map(files.map((row) => [row.organizationId, row]));
 	const materialMap = new Map(materials.map((row) => [row.organizationId, row.used]));
 	const coverMap = new Map(covers.map((row) => [row.organizationId, row.used]));
+	const photoMap = new Map(photos.map((row) => [row.organizationId, row.used]));
 	const policyMap = new Map(policyCounts.map((row) => [row.organizationId, row.total]));
 	const requestMap = new Map(requests.map((row) => [row.organizationId, row]));
 	return c.json({
@@ -261,7 +277,9 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 				storageUsed:
 					Number(fileMap.get(row.id)?.used ?? 0) +
 					Number(materialMap.get(row.id) ?? 0) +
-					Number(coverMap.get(row.id) ?? 0),
+					Number(coverMap.get(row.id) ?? 0) +
+					Number(photoMap.get(row.id) ?? 0) +
+					Number(row.logoBytes ?? 0),
 				fileCount: fileMap.get(row.id)?.total ?? 0,
 				policyCount: policyMap.get(row.id) ?? 0,
 				request: requestMap.get(row.id) ?? null,
@@ -401,6 +419,7 @@ superadminRoutes.get("/superadmin/users", async (c) => {
 					email: user.email,
 					isActive: user.isActive,
 					isSuperAdmin: user.isSuperAdmin,
+					twoFactorEnabled: user.twoFactorEnabled,
 					emailVerified: user.emailVerified,
 					createdAt: user.createdAt,
 				})
@@ -487,6 +506,30 @@ superadminRoutes.patch("/superadmin/users/:id", async (c) => {
 	if (isActive) await db.batch([update, log]);
 	else await db.batch([update, db.delete(session).where(eq(session.userId, id)), log]);
 	return c.json({ isActive });
+});
+
+// For someone who lost both their phone and backup codes, once you've confirmed
+// it's really them. It's recorded, and signs them out everywhere.
+superadminRoutes.post("/superadmin/users/:id/two-factor/reset", async (c) => {
+	const db = c.get("db");
+	const targetId = c.req.param("id");
+	const [target] = await db
+		.select({ id: user.id, twoFactorEnabled: user.twoFactorEnabled })
+		.from(user)
+		.where(eq(user.id, targetId));
+	if (!target) return jsonError(c, 404, "NOT_FOUND", "That user doesn't exist.");
+	await db.batch([
+		db.update(user).set({ twoFactorEnabled: false }).where(eq(user.id, targetId)),
+		db.delete(twoFactor).where(eq(twoFactor.userId, targetId)),
+		db.delete(session).where(eq(session.userId, targetId)),
+		db.insert(auditLog).values({
+			actorUserId: c.get("user").id,
+			action: "superadmin.two_factor_reset",
+			targetType: "user",
+			targetId,
+		}),
+	]);
+	return c.json({ ok: true });
 });
 
 superadminRoutes.get("/superadmin/plans", async (c) => {

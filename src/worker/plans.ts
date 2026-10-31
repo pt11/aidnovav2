@@ -102,7 +102,7 @@ export async function getSeatUsage(db: Db, organizationId: number) {
 // Counts everything an organization keeps in storage, including course uploads.
 // A file chosen from the Hub has no key of its own, so it isn't counted twice.
 export async function getStorageUsed(db: Db, organizationId: number) {
-	const [[files], [materials], [covers]] = await Promise.all([
+	const [[files], [materials], [covers], [logo], [photos]] = await Promise.all([
 		db
 			.select({ used: sum(orgFiles.sizeBytes) })
 			.from(orgFiles)
@@ -120,8 +120,19 @@ export async function getStorageUsed(db: Db, organizationId: number) {
 			.select({ used: sum(courses.coverBytes) })
 			.from(courses)
 			.where(eq(courses.organizationId, organizationId)),
+		db
+			.select({ used: organizations.logoBytes })
+			.from(organizations)
+			.where(eq(organizations.id, organizationId)),
+		db
+			.select({ used: sum(userProfiles.photoBytes) })
+			.from(userProfiles)
+			.where(eq(userProfiles.organizationId, organizationId)),
 	]);
-	return Number(files.used ?? 0) + Number(materials.used ?? 0) + Number(covers.used ?? 0);
+	return [files, materials, covers, logo, photos].reduce(
+		(total, row) => total + Number(row?.used ?? 0),
+		0,
+	);
 }
 
 export const planRoutes = new Hono<AppEnv>();

@@ -100,14 +100,14 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 						<button
 							type="submit"
 							disabled={save.isPending}
-							className={buttonClass("outline", "min-h-9 py-0")}
+							className={buttonClass("outline")}
 						>
 							{t("policies.save_draft")}
 						</button>
 						<button
 							type="button"
 							disabled={save.isPending}
-							className={buttonClass("primary", "min-h-9 py-0")}
+							className={buttonClass()}
 							onClick={(event) => {
 								if (event.currentTarget.form?.reportValidity()) save.mutate("published");
 							}}
@@ -119,7 +119,7 @@ function Editor({ existing }: { existing: PolicyDraft | null }) {
 					<button
 						type="submit"
 						disabled={save.isPending}
-						className={buttonClass("primary", "min-h-9 py-0")}
+						className={buttonClass()}
 					>
 						{t("common.save")}
 					</button>

@@ -230,7 +230,7 @@ function QuestionEditor({
 				{question && (
 					<button
 						type="button"
-						className="mr-auto min-h-10 rounded-md px-3 text-[13px] font-medium text-danger-foreground hover:bg-danger-surface"
+						className={buttonClass("dangerGhost", "mr-auto")}
 						onClick={() => setDeleting(true)}
 					>
 						{t("quiz.delete_question")}
@@ -310,7 +310,7 @@ function QuizSettings({ courseId, data }: { courseId: string; data: QuizData }) 
 			/>
 			<p className="text-xs leading-5 text-muted-foreground">{t("quiz.rules")}</p>
 			<div className="flex items-center gap-3">
-				<button type="submit" disabled={save.isPending} className={buttonClass("outline", "min-h-9 py-0")}>
+				<button type="submit" disabled={save.isPending} className={buttonClass("outline")}>
 					{t("common.save")}
 				</button>
 				{save.isSuccess && <span role="status" className="text-[13px] text-muted-foreground">{t("common.saved")}</span>}

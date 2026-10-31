@@ -12,6 +12,7 @@
 	--border: hsl(220 13% 91%);
 	--input: hsl(220 13% 87%);
 	--primary: hsl(215 100% 48%);
+	--chart-started: #1E9E8A;
 	--primary-foreground: hsl(0 0% 100%);
 	--selected: hsl(215 100% 95%);
 	--selected-foreground: hsl(215 100% 42%);
@@ -32,6 +33,7 @@
 	--border: hsl(220 14% 18%);
 	--input: hsl(220 16% 26%);
 	--primary: hsl(221 83% 53%);
+	--chart-started: #27A892;
 	--primary-foreground: hsl(0 0% 100%);
 	--selected: hsl(221 60% 22%);
 	--selected-foreground: hsl(215 100% 85%);

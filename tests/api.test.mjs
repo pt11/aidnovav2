@@ -4,7 +4,7 @@
 //   BASE_URL=http://localhost:5199 npm run test:api
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { before, describe, test } from "node:test";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5173";
@@ -1996,6 +1996,27 @@ describe("courses", () => {
 		assert.deepEqual(await order(), [third, first, second, fourth]);
 	});
 
+	test("people and the dashboard show learning and policy progress", async () => {
+		const { id, lessonId } = await buildCourse({ isMandatory: true });
+		await publish(id);
+		const stat = async () =>
+			(await admin.request("/api/organizations/current/members")).data.members.find((m) => m.userId === other.userId);
+		const before = await stat();
+		assert.ok(before.learning.total >= 1);
+		assert.equal(typeof before.policies.total, "number");
+		assert.ok("joinedAt" in before);
+		await json(other, `courses/${id}/lessons/${lessonId}/complete`, "POST");
+		const after = await stat();
+		assert.equal(after.learning.completed, before.learning.completed + 1);
+		const { data } = await admin.request("/api/dashboard");
+		assert.ok(data.manager.courses.enrolled >= 1);
+		assert.ok(data.manager.courses.completed >= 1);
+		assert.ok(data.manager.courses.certificates >= 1);
+		assert.equal(typeof data.manager.joinedThisMonth, "number");
+		assert.equal((await staff.request("/api/dashboard")).data.manager, null);
+		assert.equal((await staff.request("/api/organizations/current/members")).status, 403);
+	});
+
 	test("reordering moves lessons between modules and refuses a partial list", async () => {
 		const { id, moduleId, lessonId } = await buildCourse();
 		const { data: second } = await json(admin, `courses/${id}/modules`, "POST", { title: "Two" });
@@ -2008,5 +2029,283 @@ describe("courses", () => {
 		assert.equal(data.modules[0].lessons[0].id, lessonId);
 		assert.equal((await json(admin, `courses/${id}/modules/${second.id}`, "DELETE")).status, 200);
 		assert.equal((await admin.request(`/api/courses/${id}/lessons/${lessonId}/edit`)).status, 404);
+	});
+});
+
+describe("settings: images, reset links and two-step sign-in", () => {
+	let admin, manager, staff, other, outsider, orgId;
+	const PNG = Buffer.from("not really a png, but the type comes from the name");
+	const PASSWORD_BODY = { password: PASSWORD };
+
+	function totp(secret, offset = 0) {
+		const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+		let bits = "";
+		for (const char of secret.replace(/=+$/, "")) bits += alphabet.indexOf(char).toString(2).padStart(5, "0");
+		const key = Buffer.from(bits.match(/.{8}/g).map((byte) => Number.parseInt(byte, 2)));
+		const counter = Buffer.alloc(8);
+		counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000) + offset));
+		const hash = createHmac("sha1", key).update(counter).digest();
+		const at = hash[hash.length - 1] & 15;
+		return String((hash.readUInt32BE(at) & 0x7fffffff) % 1000000).padStart(6, "0");
+	}
+	async function turnOn(client) {
+		const { data } = await client.request("/api/auth/two-factor/enable", { method: "POST", body: PASSWORD_BODY });
+		const secret = new URL(data.totpURI).searchParams.get("secret");
+		const verified = await client.request("/api/auth/two-factor/verify-totp", { method: "POST", body: { code: totp(secret) } });
+		assert.equal(verified.status, 200);
+		return { secret, backupCodes: data.backupCodes };
+	}
+	const signInAgain = async (email) => {
+		const client = new Client();
+		const result = await client.request("/api/auth/sign-in/email", { method: "POST", body: { email, password: PASSWORD } });
+		return { client, result };
+	};
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("settingsadmin");
+		manager = await new Client().signUpAndIn("settingsmanager");
+		staff = await new Client().signUpAndIn("settingsstaff");
+		other = await new Client().signUpAndIn("settingsinactive");
+		outsider = await new Client().signUpAndIn("settingsout");
+		orgId = (await admin.createOrg("sigma")).data.id;
+		await outsider.createOrg("tau");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+	});
+
+	test("only admins change the logo, and only members can see it", async () => {
+		const upload = (client, name = "logo.png", body = PNG) =>
+			client.fileRequest(`/api/organizations/current/logo?name=${name}`, { method: "POST", body });
+		assert.equal((await upload(staff)).status, 403);
+		assert.equal((await upload(manager)).status, 403);
+		assert.equal((await upload(admin, "logo.svg")).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await upload(admin, "logo.png", Buffer.alloc(5 * 1024 * 1024 + 1))).data.code, "FILE_TOO_LARGE");
+		const saved = await upload(admin);
+		assert.equal(saved.status, 200);
+		const url = saved.data.logoUrl;
+		assert.equal((await staff.request("/api/me")).data.memberships[0].logoUrl, url);
+		const seen = await staff.fileRequest(url);
+		assert.equal(seen.status, 200);
+		assert.equal((await outsider.fileRequest(url)).status, 404);
+		assert.equal((await new Client().fileRequest(url)).status, 401);
+		assert.equal((await admin.request("/api/files/usage")).data.usedBytes, PNG.length);
+
+		const again = await upload(admin, "new.webp", Buffer.from("smaller"));
+		assert.notEqual(again.data.logoUrl, url);
+		assert.equal((await admin.request("/api/files/usage")).data.usedBytes, 7);
+		assert.equal((await staff.request("/api/organizations/current/logo", { method: "DELETE" })).status, 403);
+		assert.equal((await admin.request("/api/organizations/current/logo", { method: "DELETE" })).status, 200);
+		assert.equal((await admin.request("/api/me")).data.memberships[0].logoUrl, null);
+		assert.equal((await admin.request("/api/files/usage")).data.usedBytes, 0);
+		assert.equal((await staff.fileRequest(again.data.logoUrl)).status, 404);
+	});
+
+	test("anyone can set their own photo, visible only inside the organization", async () => {
+		const upload = (name = "me.jpg", body = PNG) => staff.fileRequest(`/api/me/photo?name=${name}`, { method: "POST", body });
+		assert.equal((await upload("me.svg")).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await upload("me.jpg", Buffer.alloc(2 * 1024 * 1024 + 1))).data.code, "FILE_TOO_LARGE");
+		const saved = await upload();
+		assert.equal(saved.status, 200);
+		const url = saved.data.photoUrl;
+		assert.equal((await staff.request("/api/me")).data.memberships[0].photoUrl, url);
+		assert.equal((await admin.fileRequest(url)).status, 200);
+		assert.equal((await outsider.fileRequest(url)).status, 404);
+		const { data } = await admin.request("/api/organizations/current/members");
+		assert.equal(data.members.find((m) => m.userId === staff.userId).photoUrl, url);
+		assert.ok(!JSON.stringify(data).includes("photoKey"));
+		assert.equal((await staff.request("/api/me/photo", { method: "DELETE" })).status, 200);
+		assert.equal((await admin.fileRequest(url)).status, 404);
+	});
+
+	test("reset links are admin only, for current members, and limited", async () => {
+		const send = (client, id) => client.request(`/api/organizations/current/members/${id}/send-reset`, { method: "POST" });
+		assert.equal((await send(staff, other.userId)).status, 403);
+		assert.equal((await send(manager, other.userId)).status, 403);
+		assert.equal((await send(admin, outsider.userId)).status, 404);
+		assert.equal((await send(outsider, other.userId)).status, 404);
+		for (let i = 0; i < 3; i += 1) assert.equal((await send(admin, other.userId)).status, 200);
+		assert.equal((await send(admin, other.userId)).data.code, "TOO_MANY_EMAILS");
+		await admin.request(`/api/organizations/current/members/${other.userId}/status`, { method: "PATCH", body: { isActive: false } });
+		sql(`DELETE FROM audit_log WHERE target_id = '${other.userId}' AND action = 'member.reset_link_sent'`);
+		assert.equal((await send(admin, other.userId)).status, 404);
+	});
+
+	test("two-step sign-in needs the code, and backup codes work once", async () => {
+		const person = await new Client().signUpAndIn("twostep");
+		assert.equal((await person.request("/api/me")).data.user.twoFactorEnabled, false);
+		const wrong = await person.request("/api/auth/two-factor/enable", { method: "POST", body: { password: "wrong-password" } });
+		assert.notEqual(wrong.status, 200);
+		const { secret, backupCodes } = await turnOn(person);
+		assert.equal(backupCodes.length, 10);
+		assert.equal((await person.request("/api/me")).data.user.twoFactorEnabled, true);
+		assert.ok(!JSON.stringify((await person.request("/api/me")).data).includes(secret));
+
+		const first = await signInAgain(person.email);
+		assert.equal(first.result.data.twoFactorRedirect, true);
+		assert.equal((await first.client.request("/api/me")).status, 401);
+		const bad = await first.client.request("/api/auth/two-factor/verify-totp", { method: "POST", body: { code: "000000" } });
+		assert.notEqual(bad.status, 200);
+		assert.equal((await first.client.request("/api/me")).status, 401);
+		const good = await first.client.request("/api/auth/two-factor/verify-totp", { method: "POST", body: { code: totp(secret) } });
+		assert.equal(good.status, 200);
+		assert.equal((await first.client.request("/api/me")).status, 200);
+
+		const second = await signInAgain(person.email);
+		const backup = () => second.client.request("/api/auth/two-factor/verify-backup-code", { method: "POST", body: { code: backupCodes[0] } });
+		assert.equal((await backup()).status, 200);
+		assert.equal((await second.client.request("/api/me")).status, 200);
+		const third = await signInAgain(person.email);
+		assert.notEqual((await third.client.request("/api/auth/two-factor/verify-backup-code", { method: "POST", body: { code: backupCodes[0] } })).status, 200);
+
+		assert.equal((await person.request("/api/auth/two-factor/disable", { method: "POST", body: PASSWORD_BODY })).status, 200);
+		const after = await signInAgain(person.email);
+		assert.equal(after.result.data.twoFactorRedirect, undefined);
+		assert.equal((await after.client.request("/api/me")).status, 200);
+	});
+
+	test("a platform admin can reset someone's two-step, and nobody else can", async () => {
+		const person = await new Client().signUpAndIn("twostepreset");
+		await turnOn(person);
+		const platform = await new Client().signUpAndIn("twostepplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		const path = `/api/superadmin/users/${person.userId}/two-factor/reset`;
+		assert.equal((await admin.request(path, { method: "POST" })).status, 403);
+		assert.equal((await new Client().request(path, { method: "POST" })).status, 401);
+		const { data } = await platform.request(`/api/superadmin/users?q=${encodeURIComponent(person.email)}`);
+		assert.equal(data.users[0].twoFactorEnabled, true);
+		assert.equal((await platform.request(path, { method: "POST" })).status, 200);
+		assert.equal((await person.request("/api/me")).status, 401);
+		const fresh = await signInAgain(person.email);
+		assert.equal(fresh.result.data.twoFactorRedirect, undefined);
+		assert.equal((await fresh.client.request("/api/me")).data.user.twoFactorEnabled, false);
+		assert.equal((await platform.request("/api/superadmin/users/nobody/two-factor/reset", { method: "POST" })).status, 404);
+	});
+});
+
+describe("reports and activity", () => {
+	let admin, manager, staff, other, outsider, orgId, deptId;
+	const PDF = Buffer.from("%PDF-1.4 report");
+	const report = (client, path) => client.request(`/api/reports/${path}`);
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("reportadmin");
+		manager = await new Client().signUpAndIn("reportmanager");
+		staff = await new Client().signUpAndIn("reportstaff");
+		other = await new Client().signUpAndIn("reportother");
+		outsider = await new Client().signUpAndIn("reportout");
+		orgId = (await admin.createOrg("upsilon")).data.id;
+		await outsider.createOrg("phi");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+		deptId = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Field" } })).data.id;
+		await admin.request(`/api/organizations/current/members/${staff.userId}/department`, { method: "PATCH", body: { departmentId: deptId } });
+	});
+
+	test("reports are for managers of that organization", async () => {
+		for (const path of ["overview", "policies", "announcements", "files", "departments"]) {
+			assert.equal((await staff.request(`/api/reports/${path}`)).status, 403, path);
+			assert.equal((await new Client().request(`/api/reports/${path}`)).status, 401, path);
+			assert.equal((await manager.request(`/api/reports/${path}`)).status, 200, path);
+		}
+		const { data: post } = await admin.request("/api/announcements", { method: "POST", body: { title: "Mine", content: "x", priority: "normal" } });
+		assert.equal((await outsider.request(`/api/reports/announcements/${post.id}/people`)).status, 404);
+		assert.equal((await staff.request(`/api/reports/announcements/${post.id}/people`)).status, 403);
+	});
+
+	test("announcement views and got-it are counted per person", async () => {
+		const { data: post } = await admin.request("/api/announcements", { method: "POST", body: { title: "Fire drill", content: "x", priority: "high" } });
+		const see = (client) => client.request("/api/announcements/views", { method: "POST", body: { ids: [post.id] } });
+		assert.equal((await see(staff)).status, 200);
+		assert.equal((await see(staff)).status, 200);
+		await see(other);
+		sql(`UPDATE content_views SET last_viewed_at = 1000 WHERE target_type = 'announcement' AND target_id = ${post.id} AND user_id = '${staff.userId}'`);
+		await see(staff);
+		assert.equal((await staff.request(`/api/announcements/${post.id}/respond`, { method: "POST" })).status, 200);
+		assert.equal((await outsider.request(`/api/announcements/${post.id}/respond`, { method: "POST" })).status, 404);
+		await outsider.request("/api/announcements/views", { method: "POST", body: { ids: [post.id] } });
+		assert.equal((await staff.request("/api/announcements/views", { method: "POST", body: { ids: ["x"] } })).status, 400);
+
+		const list = (await report(admin, "announcements")).data;
+		const row = list.announcements.find((item) => item.id === post.id);
+		assert.deepEqual([row.viewers, row.views, row.responses], [2, 3, 1]);
+		assert.equal(list.audience, 4);
+		const field = (await report(admin, `announcements?departmentId=${deptId}`)).data;
+		assert.equal(field.audience, 1);
+		assert.equal(field.announcements.find((item) => item.id === post.id).viewers, 1);
+
+		const { data } = await report(admin, `announcements/${post.id}/people`);
+		const byId = (id) => data.people.find((person) => person.userId === id);
+		assert.equal(byId(staff.userId).views, 2);
+		assert.ok(byId(staff.userId).respondedAt);
+		assert.equal(byId(admin.userId).views, 0);
+		assert.ok(!JSON.stringify(data).includes("photoKey"));
+
+		const feed = (await staff.request("/api/announcements")).data.announcements.find((item) => item.id === post.id);
+		assert.equal(feed.responded, true);
+		assert.equal(feed.viewers, undefined);
+		assert.equal((await admin.request("/api/announcements")).data.announcements.find((item) => item.id === post.id).viewers, 2);
+	});
+
+	test("policy views and acknowledgments show who did what", async () => {
+		const body = { title: "Report Policy", category: "General", content: "Text", isMandatory: true, status: "published", effectiveDate: null, reviewDate: null, departmentIds: [] };
+		const { data: policy } = await admin.request("/api/policies", { method: "POST", body });
+		await admin.request(`/api/policies/${policy.id}`);
+		assert.equal((await report(admin, "policies")).data.policies.find((item) => item.id === policy.id).viewers, 0);
+		await staff.request(`/api/policies/${policy.id}?view=1`);
+		await staff.request(`/api/policies/${policy.id}?view=1`);
+		assert.equal((await outsider.request(`/api/policies/${policy.id}?view=1`)).status, 404);
+		await staff.request(`/api/policies/${policy.id}/acknowledge`, { method: "POST", body: { version: 1 } });
+		const row = (await report(admin, "policies")).data.policies.find((item) => item.id === policy.id);
+		assert.deepEqual([row.viewers, row.views, row.required, row.acknowledged], [1, 1, 4, 1]);
+		assert.equal(row.audienceIds, undefined);
+		const { data } = await report(admin, `policies/${policy.id}/people`);
+		const person = data.people.find((item) => item.userId === staff.userId);
+		assert.equal(person.views, 1);
+		assert.ok(person.acknowledgedAt);
+		assert.equal(data.people.find((item) => item.userId === other.userId).acknowledgedAt, null);
+		const field = (await report(admin, `policies?departmentId=${deptId}`)).data.policies.find((item) => item.id === policy.id);
+		assert.deepEqual([field.required, field.acknowledged], [1, 1]);
+	});
+
+	test("file views, link clicks and downloads are reported", async () => {
+		const { data: file } = await admin.fileRequest("/api/files/upload?name=report.pdf", { method: "POST", body: PDF });
+		const { data: link } = await admin.request("/api/files/link", { method: "POST", body: { name: "Handbook", url: "https://example.com/h" } });
+		await staff.fileRequest(`/api/files/${file.id}/download?inline=1`);
+		await staff.fileRequest(`/api/files/${file.id}/download`);
+		await other.fileRequest(`/api/files/${file.id}/download`);
+		await staff.request(`/api/files/${link.id}/open-link`);
+		const { data } = await report(admin, "files");
+		const pdf = data.files.find((item) => item.id === file.id);
+		assert.deepEqual([pdf.people, pdf.views, pdf.downloads], [2, 1, 2]);
+		assert.equal(data.files.find((item) => item.id === link.id).views, 1);
+		const people = (await report(admin, `files/${file.id}/people`)).data.people;
+		const me = people.find((item) => item.userId === staff.userId);
+		assert.deepEqual([me.views, me.downloads], [1, 1]);
+		assert.ok(me.lastViewedAt);
+		assert.equal((await outsider.request(`/api/reports/files/${file.id}/people`)).status, 404);
+	});
+
+	test("the overview adds up courses, and departments split them", async () => {
+		const { data: course } = await admin.request("/api/courses", { method: "POST", body: { title: "Report Course", isMandatory: true } });
+		const { data: module } = await admin.request(`/api/courses/${course.id}/modules`, { method: "POST", body: { title: "M" } });
+		const { data: lesson } = await admin.request(`/api/courses/${course.id}/modules/${module.id}/lessons`, { method: "POST", body: { title: "L" } });
+		await admin.request(`/api/courses/${course.id}/lessons/${lesson.id}`, { method: "PATCH", body: { title: "L", content: "x", videoUrl: "", completionMethod: "mark", estimatedTime: "", isRequired: true } });
+		await admin.request(`/api/courses/${course.id}`, { method: "PATCH", body: { status: "published" } });
+		await staff.request(`/api/courses/${course.id}/lessons/${lesson.id}/complete`, { method: "POST" });
+		await other.request(`/api/courses/${course.id}/lessons/${lesson.id}`);
+		const { data } = await report(admin, "overview?months=6");
+		const row = data.courseList.find((item) => item.id === course.id);
+		assert.deepEqual([row.enrolled, row.completed, row.inProgress, row.notStarted], [4, 1, 1, 2]);
+		assert.ok(data.certificates >= 1);
+		assert.ok(data.months.at(-1).completed >= 1);
+		assert.ok(data.months.length >= 6);
+		const field = (await report(admin, `overview?departmentId=${deptId}`)).data.courseList.find((item) => item.id === course.id);
+		assert.deepEqual([field.enrolled, field.completed], [1, 1]);
+		const departments = (await report(admin, "departments")).data.departments;
+		assert.equal(departments.find((item) => item.id === deptId).completed, 1);
+		const none = departments.find((item) => item.id === null);
+		assert.equal(none.members, 3);
 	});
 });

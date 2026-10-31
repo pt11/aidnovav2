@@ -3,6 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { api, ApiError, authClient, type Me } from "../api";
 import {
+	Chip,
+	SearchField,
+	BUTTON_SMALL,
 	Alert,
 	buttonClass,
 	Field,
@@ -223,17 +226,8 @@ function StatCard({ label, value, detail }: { label: string; value: ReactNode; d
 }
 
 function StatusChip({ status }: { status: OrgStatus }) {
-	const styles: Record<OrgStatus, string> = {
-		trial: "bg-muted text-foreground",
-		active: "bg-[#14795A] text-white",
-		suspended: "border border-destructive text-danger-foreground",
-		cancelled: "border border-input text-muted-foreground",
-	};
-	return (
-		<span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${styles[status]}`}>
-			{status}
-		</span>
-	);
+	const tones = { trial: "neutral", active: "success", suspended: "danger", cancelled: "outline" } as const;
+	return <Chip tone={tones[status]}><span className="capitalize">{status}</span></Chip>;
 }
 
 function useDecide() {
@@ -315,7 +309,7 @@ export function SuperOverviewPage({ me }: { me: Me }) {
 									<button
 										type="button"
 										disabled={decide.isPending}
-										className={buttonClass("primary", "min-h-[30px] px-2.5 py-0 text-xs font-medium")}
+										className={buttonClass("primary", BUTTON_SMALL)}
 										onClick={() => decide.mutate({ id: request.id, decision: "approve" })}
 									>
 										Approve
@@ -323,7 +317,7 @@ export function SuperOverviewPage({ me }: { me: Me }) {
 									<button
 										type="button"
 										disabled={decide.isPending}
-										className={buttonClass("outline", "min-h-[30px] px-2.5 py-0 text-xs font-medium")}
+										className={buttonClass("outline", BUTTON_SMALL)}
 										onClick={() => decide.mutate({ id: request.id, decision: "dismiss" })}
 									>
 										Dismiss
@@ -476,7 +470,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 						<button
 							type="button"
 							disabled={decide.isPending}
-							className={buttonClass("primary", "min-h-[34px] px-3 py-0 text-[13px] font-medium")}
+							className={buttonClass("primary", BUTTON_SMALL)}
 							onClick={() => decide.mutate({ id: org.request!.id, decision: "approve" })}
 						>
 							Approve and activate
@@ -484,7 +478,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 						<button
 							type="button"
 							disabled={decide.isPending}
-							className={buttonClass("outline", "min-h-[34px] px-3 py-0 text-[13px] font-medium")}
+							className={buttonClass("outline", BUTTON_SMALL)}
 							onClick={() => decide.mutate({ id: org.request!.id, decision: "dismiss" })}
 						>
 							Dismiss
@@ -563,7 +557,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 					<button
 						type="submit"
 						disabled={save.isPending}
-						className={buttonClass("outline", "min-h-[34px] px-3 py-0 text-[13px] font-medium")}
+						className={buttonClass("outline", BUTTON_SMALL)}
 					>
 						Save
 					</button>
@@ -595,7 +589,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 							<button
 								type="button"
 								disabled={save.isPending}
-								className={buttonClass("primary", "min-h-[34px] px-3 py-0 text-[13px] font-medium")}
+								className={buttonClass("primary", BUTTON_SMALL)}
 								onClick={() => save.mutate("active")}
 							>
 								Activate
@@ -603,7 +597,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 							{org.status === "trial" && (
 								<button
 									type="button"
-									className="min-h-[34px] rounded-md border border-destructive px-3 text-[13px] font-medium text-danger-foreground hover:bg-danger-surface"
+									className={buttonClass("dangerOutline", BUTTON_SMALL)}
 									onClick={() => setSuspendOpen(true)}
 								>
 									Suspend…
@@ -613,7 +607,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 								<button
 									type="button"
 									disabled={changeStatus.isPending}
-									className={buttonClass("outline", "min-h-[34px] px-3 py-0 text-[13px] font-medium")}
+									className={buttonClass("outline", BUTTON_SMALL)}
 									onClick={() => changeStatus.mutate("trial")}
 								>
 									Back to trial
@@ -701,14 +695,7 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 			{organizations.data && (
 				<>
 					<div className="flex flex-wrap items-center gap-2">
-						<input
-							type="search"
-							aria-label="Search organizations"
-							placeholder="Search by name or owner email…"
-							value={search}
-							onChange={(event) => setSearch(event.target.value)}
-							className="min-h-[38px] min-w-52 flex-1 rounded-md border border-input bg-card px-3"
-						/>
+						<SearchField label={"Search by name or owner email…"} value={search} onChange={setSearch} className="min-w-52 flex-1" />
 						<select
 							aria-label="Status"
 							value={status}
@@ -800,6 +787,7 @@ interface PlatformUser {
 	email: string;
 	isActive: boolean;
 	isSuperAdmin: boolean;
+	twoFactorEnabled: boolean;
 	createdAt: string;
 	lastActive: number | null;
 	organizations: { name: string; role: string; isActive: boolean }[];
@@ -827,6 +815,15 @@ export function SuperUsersPage({ me }: { me: Me }) {
 				users: PlatformUser[];
 			}>(`/superadmin/users?q=${encodeURIComponent(query)}`),
 	});
+	const [resetting, setResetting] = useState<PlatformUser | null>(null);
+	const resetTwoStep = useMutation({
+		mutationFn: (target: PlatformUser) =>
+			api(`/superadmin/users/${target.id}/two-factor/reset`, { method: "POST" }),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["superadmin"] });
+			setResetting(null);
+		},
+	});
 	const change = useMutation({
 		mutationFn: (target: PlatformUser) =>
 			api(`/superadmin/users/${target.id}`, {
@@ -849,14 +846,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 					<StatCard label="Deactivated" value={users.data.totals.deactivated} />
 				</dl>
 			)}
-			<input
-				type="search"
-				aria-label="Search users"
-				placeholder="Search by name or email…"
-				value={search}
-				onChange={(event) => setSearch(event.target.value)}
-				className="min-h-[38px] rounded-md border border-input bg-card px-3"
-			/>
+			<SearchField label={"Search by name or email…"} value={search} onChange={setSearch} />
 			{users.isPending && <PageLoading />}
 			{users.data && (
 				<section className="overflow-x-auto rounded-card border border-border bg-card">
@@ -895,7 +885,21 @@ export function SuperUsersPage({ me }: { me: Me }) {
 									</td>
 									<td className="px-2 py-2.5">{formatDate(person.createdAt)}</td>
 									<td className="px-2 py-2.5">{formatDate(person.lastActive)}</td>
-									<td className="px-2 py-2.5">{person.isActive ? "Active" : "Deactivated"}</td>
+									<td className="px-2 py-2.5">
+										{person.isActive ? "Active" : "Deactivated"}
+										{person.twoFactorEnabled && (
+											<button
+												type="button"
+												className="block text-xs text-selected-foreground hover:underline"
+												onClick={() => {
+													resetTwoStep.reset();
+													setResetting(person);
+												}}
+											>
+												Reset two-step…
+											</button>
+										)}
+									</td>
 									<td className="px-4 py-2.5 text-right">
 										{person.isSuperAdmin || person.id === me.user.id ? (
 											<span className="text-xs text-muted-foreground">Protected</span>
@@ -904,7 +908,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 												type="button"
 												className={buttonClass(
 													person.isActive ? "outline" : "primary",
-													"min-h-[30px] px-2.5 py-0 text-xs font-medium",
+													BUTTON_SMALL,
 												)}
 												onClick={() => {
 													change.reset();
@@ -954,6 +958,31 @@ export function SuperUsersPage({ me }: { me: Me }) {
 						onClick={() => changing && change.mutate(changing)}
 					>
 						{changing?.isActive ? "Deactivate" : "Activate"}
+					</button>
+				</div>
+			</Modal>
+			<Modal
+				title={resetting ? `Reset two-step for ${resetting.name}?` : ""}
+				description="Only do this once you've confirmed it's really them, for example when they've lost their phone and backup codes. They'll be signed out and can sign in with just their password."
+				open={resetting !== null}
+				onClose={() => setResetting(null)}
+			>
+				{resetTwoStep.isError && (
+					<div className="mb-3">
+						<Alert>That didn't work. Please try again.</Alert>
+					</div>
+				)}
+				<div className="flex justify-end gap-2">
+					<button type="button" className={buttonClass("outline")} onClick={() => setResetting(null)}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						disabled={resetTwoStep.isPending}
+						className={buttonClass("danger")}
+						onClick={() => resetting && resetTwoStep.mutate(resetting)}
+					>
+						Reset two-step
 					</button>
 				</div>
 			</Modal>
@@ -1101,7 +1130,7 @@ function PlanForm({ plan, onDone }: { plan: Plan | null; onDone: () => void }) {
 					<button
 						type="button"
 						disabled={remove.isPending}
-						className="mr-auto min-h-10 rounded-md px-3 text-[13px] font-medium text-danger-foreground hover:bg-danger-surface"
+						className={buttonClass("dangerGhost", "mr-auto")}
 						onClick={() => remove.mutate()}
 					>
 						Delete plan
@@ -1131,7 +1160,7 @@ export function SuperPlansPage({ me }: { me: Me }) {
 			title="Plans"
 			subtitle="Packages shown in Plan & usage. Extra users cost $10 a month per 25, with 10 GB more storage."
 			action={
-				<button type="button" className={buttonClass("primary", "min-h-9 py-0")} onClick={() => setEditing("new")}>
+				<button type="button" className={buttonClass()} onClick={() => setEditing("new")}>
 					+ New plan
 				</button>
 			}
@@ -1159,7 +1188,7 @@ export function SuperPlansPage({ me }: { me: Me }) {
 						<button
 							type="button"
 							aria-label={`Edit ${plan.name}`}
-							className={buttonClass("outline", "min-h-9 py-0")}
+							className={buttonClass("outline")}
 							onClick={() => setEditing(plan)}
 						>
 							Edit
