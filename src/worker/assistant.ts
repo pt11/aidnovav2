@@ -14,8 +14,8 @@ import { cleanText, readJson } from "./validate";
 const MODEL = "@cf/zai-org/glm-4.7-flash";
 // The model reasons before it answers, and that counts towards this limit.
 const MAX_ANSWER_TOKENS = 3000;
-const RETRY_WITHIN_MS = 20_000;
 const MODEL_TIMEOUT_MS = 45_000;
+const FAST_RETRY_TIMEOUT_MS = 20_000;
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 2000;
 const MAX_QUESTIONS_PER_USER_DAY = 30;
@@ -133,6 +133,7 @@ async function askModel(
 	env: Env,
 	systemPrompt: string,
 	messages: { role: string; content: string }[],
+	fast = false,
 ) {
 	// Nobody should wait indefinitely for one answer.
 	const result = (await Promise.race([
@@ -140,19 +141,30 @@ async function askModel(
 			messages: [{ role: "system", content: systemPrompt }, ...messages],
 			max_completion_tokens: MAX_ANSWER_TOKENS,
 			temperature: 0.2,
+			...(fast ? { chat_template_kwargs: { enable_thinking: false } } : {}),
 		} as never),
 		new Promise((_, reject) =>
 			setTimeout(
 				() => reject(new Error("The assistant model timed out")),
-				MODEL_TIMEOUT_MS,
+				fast ? FAST_RETRY_TIMEOUT_MS : MODEL_TIMEOUT_MS,
 			),
 		),
 	])) as ModelResult;
 	const reply = readReply(result);
 	if (!reply) {
+		// Only the shape of the reply, never its content.
+		const choice = result.choices?.[0] as
+			| { finish_reason?: string; message?: Record<string, unknown> }
+			| undefined;
 		console.error(
 			"The assistant model returned no answer",
-			result.choices?.[0]?.finish_reason,
+			JSON.stringify({
+				finish: choice?.finish_reason,
+				fields: Object.entries(choice?.message ?? {}).map(
+					([name, value]) => `${name}:${typeof value === "string" ? value.length : typeof value}`,
+				),
+				usage: (result as { usage?: unknown }).usage,
+			}),
 		);
 	}
 	return reply;
@@ -303,13 +315,13 @@ assistantRoutes.post("/assistant", requireUser, requireOrg, async (c) => {
 		cleanText(org.name),
 	);
 	try {
-		// The model occasionally returns nothing. It gets one more chance, unless
-		// the person has already waited a long time.
-		const startedAt = Date.now();
-		let reply = await askModel(c.env, prompt, messages);
-		if (!reply && Date.now() - startedAt < RETRY_WITHIN_MS) {
-			reply = await askModel(c.env, prompt, messages);
-		}
+		// The model reasons first, which gives better answers, but it sometimes stops
+		// before writing one. The retry skips that step, so it's quick and reliable.
+		const reply =
+			(await askModel(c.env, prompt, messages).catch((error) => {
+				console.error(error);
+				return null;
+			})) ?? (await askModel(c.env, prompt, messages, true));
 		if (!reply) {
 			return jsonError(c, 502, "ASSISTANT_FAILED", "The assistant couldn't answer. Try again.");
 		}
