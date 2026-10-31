@@ -1609,3 +1609,404 @@ describe("plans and platform admin", () => {
 		assert.equal(typeof overview.data.organizations.trial, "number");
 	});
 });
+
+describe("courses", () => {
+	let admin, manager, staff, other, outsider, orgId;
+	const PDF = Buffer.from("%PDF-1.4 test");
+
+	const json = (client, path, method, body) => client.request(`/api/${path}`, { method, body });
+	async function buildCourse(fields = {}) {
+		const { data: course } = await json(admin, "courses", "POST", { title: `Course ${RUN}`, ...fields });
+		const { data: module } = await json(admin, `courses/${course.id}/modules`, "POST", { title: "One" });
+		const { data: lesson } = await json(admin, `courses/${course.id}/modules/${module.id}/lessons`, "POST", { title: "First" });
+		const save = (changes) =>
+			json(admin, `courses/${course.id}/lessons/${lesson.id}`, "PATCH", {
+				title: "First",
+				content: "Read this",
+				videoUrl: "",
+				completionMethod: "mark",
+				estimatedTime: "",
+				isRequired: true,
+				...changes,
+			});
+		assert.equal((await save({})).status, 200);
+		return { id: course.id, moduleId: module.id, lessonId: lesson.id, save };
+	}
+	const publish = (id) => json(admin, `courses/${id}`, "PATCH", { status: "published" });
+	const uploadMaterial = (courseId, lessonId, name = "guide.pdf", body = PDF) =>
+		admin.fileRequest(`/api/courses/${courseId}/lessons/${lessonId}/materials/upload?required=1&name=${encodeURIComponent(name)}`, { method: "POST", body });
+	const question = (overrides = {}) => ({
+		question: "Which?",
+		type: "single",
+		options: [
+			{ text: "Right", correct: true },
+			{ text: "Wrong", correct: false },
+		],
+		...overrides,
+	});
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("courseadmin");
+		manager = await new Client().signUpAndIn("coursemanager");
+		staff = await new Client().signUpAndIn("coursestaff");
+		other = await new Client().signUpAndIn("coursestafftwo");
+		outsider = await new Client().signUpAndIn("courseout");
+		orgId = (await admin.createOrg("omicron")).data.id;
+		await outsider.createOrg("pi");
+		addMember(manager.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+	});
+
+	test("only managers can build, and only in their own organization", async () => {
+		const { id, moduleId, lessonId } = await buildCourse();
+		const writes = [
+			["POST", "courses", { title: "x" }],
+			["PATCH", `courses/${id}`, { title: "x" }],
+			["DELETE", `courses/${id}`],
+			["POST", `courses/${id}/modules`, { title: "x" }],
+			["PATCH", `courses/${id}/modules/${moduleId}`, { title: "x" }],
+			["DELETE", `courses/${id}/modules/${moduleId}`],
+			["POST", `courses/${id}/modules/${moduleId}/lessons`, { title: "x" }],
+			["PATCH", `courses/${id}/lessons/${lessonId}`, {}],
+			["DELETE", `courses/${id}/lessons/${lessonId}`],
+			["POST", `courses/${id}/reorder`, { modules: [] }],
+			["POST", `courses/${id}/quiz/questions`, question()],
+			["POST", `courses/${id}/enrollments`, { userIds: [] }],
+		];
+		for (const [method, path, body] of writes) {
+			assert.equal((await json(staff, path, method, body)).status, 403, path);
+			if (path !== "courses") {
+				assert.equal((await json(outsider, path, method, body)).status, 404, path);
+			}
+		}
+		for (const path of [`courses/${id}/manage`, `courses/${id}/learners`, `courses/${id}/quiz/edit`, `courses/${id}/lessons/${lessonId}/edit`, "course-hub-files"]) {
+			assert.equal((await staff.request(`/api/${path}`)).status, 403, path);
+		}
+		for (const path of [`courses/${id}`, `courses/${id}/manage`, `courses/${id}/lessons/${lessonId}`, `courses/${id}/quiz`]) {
+			assert.equal((await outsider.request(`/api/${path}`)).status, 404, path);
+		}
+		assert.equal((await new Client().request(`/api/courses/${id}`)).status, 401);
+		assert.equal((await json(manager, "courses", "POST", { title: "Manager's" })).status, 201);
+		assert.equal((await json(admin, "courses", "POST", { title: "" })).status, 400);
+	});
+
+	test("a course needs content to publish, and staff only see what's theirs", async () => {
+		const { data: empty } = await json(admin, "courses", "POST", { title: "Empty" });
+		assert.equal((await publish(empty.id)).data.code, "NO_CONTENT");
+
+		const { id, lessonId } = await buildCourse();
+		const seen = async (client) => (await client.request("/api/courses")).data.learning.some((c) => c.id === id);
+		assert.equal((await staff.request(`/api/courses/${id}`)).status, 404);
+		assert.equal((await publish(id)).status, 200);
+		assert.equal(await seen(staff), false);
+		assert.equal((await staff.request(`/api/courses/${id}/lessons/${lessonId}`)).status, 404);
+
+		assert.equal((await json(admin, `courses/${id}/enrollments`, "POST", { userIds: [outsider.userId] })).status, 400);
+		assert.equal((await json(admin, `courses/${id}/enrollments`, "POST", { userIds: [staff.userId] })).status, 201);
+		assert.equal(await seen(staff), true);
+		assert.equal(await seen(other), false);
+		assert.equal((await staff.request(`/api/courses/${id}/lessons/${lessonId}`)).status, 200);
+		const todo = (await staff.request("/api/dashboard")).data.pendingCourses;
+		assert.ok(todo.some((c) => c.id === id));
+
+		await json(admin, `courses/${id}`, "PATCH", { status: "draft" });
+		assert.equal((await staff.request(`/api/courses/${id}`)).status, 404);
+		await publish(id);
+		await json(admin, `courses/${id}/enrollments/${staff.userId}`, "DELETE");
+		assert.equal(await seen(staff), false);
+
+		await json(admin, `courses/${id}`, "PATCH", { isMandatory: true });
+		assert.equal(await seen(other), true);
+		assert.equal((await manager.request("/api/courses")).data.learning.some((c) => c.id === id), true);
+	});
+
+	test("required pages come before completing a lesson", async () => {
+		const { id, lessonId } = await buildCourse({ isMandatory: true });
+		const { data: material } = await uploadMaterial(id, lessonId);
+		await publish(id);
+		const complete = () => json(staff, `courses/${id}/lessons/${lessonId}/complete`, "POST");
+		const view = (client, body) => json(client, `courses/${id}/materials/${material.id}/view`, "POST", body);
+		assert.equal((await complete()).data.code, "MATERIALS_REQUIRED");
+		assert.equal((await view(staff, { page: 0, pageCount: 3 })).status, 400);
+		assert.equal((await view(staff, { page: 1, pageCount: 3 })).data.done, false);
+		assert.equal((await complete()).data.code, "MATERIALS_REQUIRED");
+		assert.equal((await view(staff, { page: 9, pageCount: 3 })).status, 400);
+		assert.equal((await view(staff, { page: 2, pageCount: 3 })).status, 200);
+		const last = await view(staff, { page: 3, pageCount: 3 });
+		assert.equal(last.data.done, true);
+		assert.deepEqual(last.data.viewedPages, [1, 2, 3]);
+		assert.equal((await complete()).status, 200);
+
+		// A later viewer can't shorten the document to finish it sooner.
+		assert.equal((await view(other, { page: 1, pageCount: 1 })).data.done, false);
+		const lesson = await other.request(`/api/courses/${id}/lessons/${lessonId}`);
+		assert.deepEqual(lesson.data.materials[0].viewedPages, [1]);
+		assert.equal(lesson.data.materials[0].done, false);
+	});
+
+	test("a required video needs watching, and any other file opening", async () => {
+		const { id, lessonId } = await buildCourse({ isMandatory: true });
+		const start = await json(admin, `courses/${id}/lessons/${lessonId}/materials/video`, "POST", { name: "talk.mp4", sizeBytes: 100, isRequired: true });
+		assert.equal(start.status, 201);
+		assert.equal((await json(admin, `courses/${id}/lessons/${lessonId}/materials/video`, "POST", { name: "talk.mov", sizeBytes: 100 })).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await json(admin, `courses/${id}/lessons/${lessonId}/materials/video`, "POST", { name: "big.mp4", sizeBytes: 3 * 1024 ** 3 })).data.code, "FILE_TOO_LARGE");
+		const first = Buffer.alloc(5 * 1024 * 1024, 1);
+		const second = Buffer.alloc(1024, 2);
+		const put = (client, part, body) => client.fileRequest(`/api/courses/${id}/materials/${start.data.id}/video/${part}`, { method: "PUT", body });
+		assert.equal((await put(staff, 1, second)).status, 403);
+		const one = await put(admin, 1, first);
+		assert.equal(one.status, 200);
+		const two = await put(admin, 2, second);
+		await publish(id);
+
+		// Unfinished uploads aren't visible to learners yet.
+		assert.equal((await staff.request(`/api/courses/${id}/lessons/${lessonId}`)).data.materials.length, 0);
+		const finished = await json(admin, `courses/${id}/materials/${start.data.id}/video/complete`, "POST", { parts: [one.data, two.data] });
+		assert.equal(finished.status, 200);
+		const lesson = await staff.request(`/api/courses/${id}/lessons/${lessonId}`);
+		assert.equal(lesson.data.materials[0].kind, "video");
+		assert.equal(lesson.data.materials[0].sizeBytes, first.length + second.length);
+
+		const range = await staff.fileRequest(`/api/courses/${id}/materials/${start.data.id}/file`);
+		assert.equal(range.status, 200);
+		const partial = await fetch(`${BASE}/api/courses/${id}/materials/${start.data.id}/file`, {
+			headers: { range: "bytes=0-99", cookie: [...staff.cookies].map(([n, v]) => `${n}=${v}`).join("; "), "cf-connecting-ip": staff.ip },
+		});
+		assert.equal(partial.status, 206);
+		assert.equal((await partial.arrayBuffer()).byteLength, 100);
+		assert.match(partial.headers.get("content-range"), /^bytes 0-99\//);
+
+		const complete = () => json(staff, `courses/${id}/lessons/${lessonId}/complete`, "POST");
+		assert.equal((await complete()).data.code, "MATERIALS_REQUIRED");
+		const view = (body) => json(staff, `courses/${id}/materials/${start.data.id}/view`, "POST", body);
+		assert.equal((await view({ event: "opened" })).data.done, false);
+		assert.equal((await view({ event: "ended" })).data.done, true);
+		assert.equal((await complete()).status, 200);
+
+		const sheet = await uploadMaterial(id, lessonId, "numbers.xlsx");
+		assert.equal((await staff.request(`/api/courses/${id}/lessons/${lessonId}`)).data.materials.find((m) => m.id === sheet.data.id).isRequired, false);
+		assert.equal((await json(admin, `courses/${id}/materials/${sheet.data.id}`, "PATCH", { isRequired: true })).data.code, "CANNOT_BE_REQUIRED");
+		const slides = await uploadMaterial(id, lessonId, "slides.pptx");
+		const opened = await json(other, `courses/${id}/materials/${slides.data.id}/view`, "POST", { event: "opened" });
+		assert.equal(opened.data.done, true);
+	});
+
+	test("quiz answers stay secret, and passing issues one certificate", async () => {
+		const { id, lessonId } = await buildCourse({ isMandatory: true });
+		const q1 = await json(admin, `courses/${id}/quiz/questions`, "POST", question());
+		const q2 = await json(admin, `courses/${id}/quiz/questions`, "POST", question({
+			type: "multiple",
+			options: [
+				{ text: "A", correct: true },
+				{ text: "B", correct: true },
+				{ text: "C", correct: false },
+			],
+		}));
+		assert.equal((await json(admin, `courses/${id}/quiz/questions`, "POST", question({ options: [{ text: "A", correct: true }, { text: "B", correct: true }] }))).status, 400);
+		assert.equal((await json(admin, `courses/${id}/quiz/questions`, "POST", question({ options: [{ text: "", correct: true }, { text: "B", correct: false }] }))).status, 400);
+		await publish(id);
+		const attempt = (answers) => json(staff, `courses/${id}/quiz/attempts`, "POST", { answers });
+		const right = { [q1.data.id]: [0], [q2.data.id]: [0, 1] };
+		const half = { [q1.data.id]: [0], [q2.data.id]: [0] };
+
+		const locked = await staff.request(`/api/courses/${id}/quiz`);
+		assert.equal(locked.data.unlocked, false);
+		assert.deepEqual(locked.data.questions, []);
+		assert.equal((await attempt(right)).data.code, "QUIZ_LOCKED");
+
+		assert.equal((await json(staff, `courses/${id}/lessons/${lessonId}/complete`, "POST")).data.completed, false);
+		const open = await staff.request(`/api/courses/${id}/quiz`);
+		assert.equal(open.data.questions.length, 2);
+		assert.equal(JSON.stringify(open.data).includes("correct\""), false);
+		assert.deepEqual(open.data.questions[0].options, ["Right", "Wrong"]);
+
+		assert.equal((await attempt({ [q1.data.id]: [0] })).data.code, "UNANSWERED");
+		assert.equal((await attempt({ [q1.data.id]: [5], [q2.data.id]: [0] })).status, 400);
+
+		const failed = await attempt(half);
+		assert.equal(failed.status, 201);
+		assert.equal(failed.data.score, 50);
+		assert.equal(failed.data.passed, false);
+		assert.equal(failed.data.review, null);
+		assert.equal(failed.data.certificateId, null);
+		assert.equal(JSON.stringify((await staff.request(`/api/courses/${id}/quiz`)).data).includes("correct\":true"), false);
+
+		const passed = await attempt(right);
+		assert.equal(passed.data.score, 100);
+		assert.equal(passed.data.passed, true);
+		assert.equal(passed.data.completed, true);
+		assert.equal(passed.data.attemptNumber, 2);
+		assert.ok(passed.data.review[0].options[0].correct);
+		assert.ok(passed.data.certificateId);
+		assert.equal((await attempt(right)).data.code, "ALREADY_PASSED");
+
+		const certificateId = passed.data.certificateId;
+		const cert = await staff.request(`/api/certificates/${certificateId}`);
+		assert.equal(cert.data.recipientName, "coursestaff");
+		assert.equal(cert.data.courseTitle, `Course ${RUN}`);
+		assert.equal((await admin.request(`/api/certificates/${certificateId}`)).status, 200);
+		assert.equal((await other.request(`/api/certificates/${certificateId}`)).status, 404);
+		assert.equal((await outsider.request(`/api/certificates/${certificateId}`)).status, 404);
+		assert.ok((await staff.request("/api/me/certificates")).data.certificates.some((c) => c.id === certificateId));
+		assert.ok(!(await staff.request("/api/dashboard")).data.pendingCourses.some((c) => c.id === id));
+
+		const { data: progress } = await admin.request(`/api/courses/${id}/learners`);
+		const row = progress.learners.find((l) => l.id === staff.userId);
+		assert.equal(row.status, "completed");
+		assert.equal(row.percent, 100);
+		assert.equal(row.bestScore, 100);
+		assert.equal(row.attempts, 2);
+		assert.equal(progress.learners.find((l) => l.id === other.userId).status, "not_started");
+
+		assert.equal((await json(admin, `courses/${id}`, "DELETE")).status, 200);
+		assert.equal((await staff.request(`/api/certificates/${certificateId}`)).status, 200);
+		assert.equal((await staff.request(`/api/courses/${id}`)).status, 404);
+	});
+
+	test("previewing records nothing", async () => {
+		const { id, lessonId } = await buildCourse();
+		const { data: material } = await uploadMaterial(id, lessonId);
+		await json(admin, `courses/${id}/quiz/questions`, "POST", question());
+		const course = await manager.request(`/api/courses/${id}`);
+		assert.equal(course.data.preview, true);
+		assert.equal((await manager.request(`/api/courses/${id}/lessons/${lessonId}`)).data.preview, true);
+		assert.equal((await json(manager, `courses/${id}/materials/${material.id}/view`, "POST", { page: 1, pageCount: 5 })).data.preview, true);
+		assert.equal((await json(manager, `courses/${id}/lessons/${lessonId}/complete`, "POST")).data.code, "PREVIEW_ONLY");
+		assert.equal((await json(manager, `courses/${id}/quiz/attempts`, "POST", { answers: {} })).data.code, "PREVIEW_ONLY");
+		assert.ok((await manager.request(`/api/courses/${id}/quiz`)).data.questions.length > 0);
+		const edit = await admin.request(`/api/courses/${id}/lessons/${lessonId}/edit`);
+		assert.equal(edit.data.materials[0].pageCount, null);
+		const { data } = await admin.request(`/api/courses/${id}/manage`);
+		assert.equal(data.stats.inProgress, 0);
+	});
+
+	test("files count towards storage, and deleting removes them", async () => {
+		const owner = await new Client().signUpAndIn("coursestorage");
+		const id = (await owner.createOrg("rho")).data.id;
+		const { data: course } = await owner.request("/api/courses", { method: "POST", body: { title: "Store" } });
+		const { data: module } = await owner.request(`/api/courses/${course.id}/modules`, { method: "POST", body: { title: "M" } });
+		const { data: lesson } = await owner.request(`/api/courses/${course.id}/modules/${module.id}/lessons`, { method: "POST", body: { title: "L" } });
+		const upload = (name) => owner.fileRequest(`/api/courses/${course.id}/lessons/${lesson.id}/materials/upload?name=${name}`, { method: "POST", body: PDF });
+
+		assert.equal((await upload("run.exe")).data.code, "TYPE_NOT_ALLOWED");
+		sql(`UPDATE organizations SET custom_storage_gb = 0 WHERE id = ${id}`);
+		assert.equal((await upload("a.pdf")).data.code, "STORAGE_FULL");
+		sql(`UPDATE organizations SET custom_storage_gb = 1 WHERE id = ${id}`);
+		const added = await upload("a.pdf");
+		assert.equal(added.status, 201);
+		assert.equal((await owner.request("/api/files/usage")).data.usedBytes, PDF.length);
+
+		const cover = await owner.fileRequest(`/api/courses/${course.id}/cover?name=c.png`, { method: "POST", body: PDF });
+		assert.equal(cover.status, 200);
+		assert.equal((await owner.fileRequest(`/api/courses/${course.id}/cover?name=c.svg`, { method: "POST", body: PDF })).data.code, "TYPE_NOT_ALLOWED");
+		assert.equal((await owner.request("/api/files/usage")).data.usedBytes, PDF.length * 2);
+		assert.equal((await owner.fileRequest(`/api/courses/${course.id}/cover`)).status, 200);
+
+		assert.equal((await owner.request(`/api/courses/${course.id}/materials/${added.data.id}`, { method: "DELETE" })).status, 200);
+		assert.equal((await owner.request("/api/files/usage")).data.usedBytes, PDF.length);
+		assert.equal((await owner.request(`/api/courses/${course.id}`, { method: "DELETE" })).status, 200);
+		assert.equal((await owner.request("/api/files/usage")).data.usedBytes, 0);
+	});
+
+	test("hub files with a PIN or limits stay out of courses, even later on", async () => {
+		const { id, lessonId } = await buildCourse({ isMandatory: true });
+		const addFile = async (name) =>
+			(await admin.fileRequest(`/api/files/upload?name=${name}`, { method: "POST", body: PDF })).data.id;
+		const open = await addFile("open.pdf");
+		const pinned = await addFile("pinned.pdf");
+		const limited = await addFile("limited.pdf");
+		const image = await addFile("photo.png");
+		const { data: department } = await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: `Limit ${RUN}` } });
+		await admin.request(`/api/files/${pinned}`, { method: "PATCH", body: { name: "pinned.pdf", pin: "1234" } });
+		await admin.request(`/api/files/${limited}`, { method: "PATCH", body: { name: "limited.pdf", departmentIds: [department.id] } });
+
+		const { data: hub } = await admin.request("/api/course-hub-files");
+		const problem = (fileId) => hub.files.find((f) => f.id === fileId).problem;
+		assert.equal(problem(open), null);
+		assert.equal(problem(pinned), "pin");
+		assert.equal(problem(limited), "limited");
+		assert.equal(problem(image), "type");
+
+		const attach = (fileIds) => json(admin, `courses/${id}/lessons/${lessonId}/materials/hub`, "POST", { fileIds });
+		for (const bad of [pinned, limited, image, 99999999]) {
+			assert.equal((await attach([bad])).status, 400, String(bad));
+		}
+		assert.equal((await attach([open])).data.added, 1);
+		assert.equal((await attach([open])).data.added, 0);
+		await publish(id);
+
+		const lesson = () => staff.request(`/api/courses/${id}/lessons/${lessonId}`);
+		const material = (await lesson()).data.materials[0];
+		assert.equal(material.fromHub, true);
+		assert.equal((await staff.fileRequest(`/api/courses/${id}/materials/${material.id}/file`)).status, 200);
+		assert.equal((await json(staff, `courses/${id}/lessons/${lessonId}/complete`, "POST")).data.code, "MATERIALS_REQUIRED");
+
+		// Limiting it afterwards hides it from learners, and doesn't leave them stuck.
+		await admin.request(`/api/files/${open}`, { method: "PATCH", body: { name: "open.pdf", departmentIds: [department.id] } });
+		assert.equal((await lesson()).data.materials.length, 0);
+		assert.equal((await staff.fileRequest(`/api/courses/${id}/materials/${material.id}/file`)).status, 404);
+		assert.equal((await json(staff, `courses/${id}/lessons/${lessonId}/complete`, "POST")).status, 200);
+		const edit = await admin.request(`/api/courses/${id}/lessons/${lessonId}/edit`);
+		assert.equal(edit.data.materials[0].unavailable, true);
+	});
+
+	test("video links are limited to YouTube and Vimeo", async () => {
+		const { id, lessonId, save } = await buildCourse({ isMandatory: true });
+		await publish(id);
+		const embedFor = async (videoUrl) => {
+			const saved = await save({ videoUrl });
+			if (saved.status !== 200) return saved.data.code;
+			return (await staff.request(`/api/courses/${id}/lessons/${lessonId}`)).data.videoEmbed;
+		};
+		assert.equal(await embedFor("https://youtu.be/dQw4w9WgXcQ"), "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
+		assert.equal(await embedFor("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=3"), "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ");
+		assert.equal(await embedFor("https://vimeo.com/123456789"), "https://player.vimeo.com/video/123456789");
+		for (const bad of [
+			"javascript:alert(1)",
+			"http://youtu.be/dQw4w9WgXcQ",
+			"https://evil.example/watch?v=dQw4w9WgXcQ",
+			"https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+			"https://www.youtube.com/watch?v=<script>",
+		]) {
+			assert.equal(await embedFor(bad), "INVALID_VIDEO", bad);
+		}
+	});
+
+	test("lesson type is saved, and files keep the order they're given", async () => {
+		const { id, lessonId, save } = await buildCourse();
+		const edit = () => admin.request(`/api/courses/${id}/lessons/${lessonId}/edit`);
+		assert.equal((await edit()).data.lessonType, "reading");
+		assert.equal((await save({ lessonType: "document" })).status, 200);
+		assert.equal((await edit()).data.lessonType, "document");
+		assert.equal((await save({ lessonType: "other" })).status, 400);
+
+		const first = (await uploadMaterial(id, lessonId, "a.pdf")).data.id;
+		const second = (await uploadMaterial(id, lessonId, "b.pdf")).data.id;
+		const third = (await uploadMaterial(id, lessonId, "c.pdf")).data.id;
+		const order = async () => (await edit()).data.materials.map((m) => m.id);
+		assert.deepEqual(await order(), [first, second, third]);
+		const reorder = (client, ids) => json(client, `courses/${id}/lessons/${lessonId}/materials/reorder`, "POST", { ids });
+		assert.equal((await reorder(admin, [third, first])).status, 400);
+		assert.equal((await reorder(staff, [third, first, second])).status, 403);
+		assert.equal((await reorder(outsider, [third, first, second])).status, 404);
+		assert.equal((await reorder(admin, [third, first, second])).status, 200);
+		assert.deepEqual(await order(), [third, first, second]);
+		const fourth = (await uploadMaterial(id, lessonId, "d.pdf")).data.id;
+		assert.deepEqual(await order(), [third, first, second, fourth]);
+	});
+
+	test("reordering moves lessons between modules and refuses a partial list", async () => {
+		const { id, moduleId, lessonId } = await buildCourse();
+		const { data: second } = await json(admin, `courses/${id}/modules`, "POST", { title: "Two" });
+		const reorder = (modules) => json(admin, `courses/${id}/reorder`, "POST", { modules });
+		assert.equal((await reorder([{ id: moduleId, lessonIds: [] }, { id: second.id, lessonIds: [] }])).status, 400);
+		assert.equal((await reorder([{ id: moduleId, lessonIds: [lessonId] }])).status, 400);
+		assert.equal((await reorder([{ id: second.id, lessonIds: [lessonId] }, { id: moduleId, lessonIds: [] }])).status, 200);
+		const { data } = await admin.request(`/api/courses/${id}/manage`);
+		assert.equal(data.modules[0].id, second.id);
+		assert.equal(data.modules[0].lessons[0].id, lessonId);
+		assert.equal((await json(admin, `courses/${id}/modules/${second.id}`, "DELETE")).status, 200);
+		assert.equal((await admin.request(`/api/courses/${id}/lessons/${lessonId}/edit`)).status, 404);
+	});
+});

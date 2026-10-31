@@ -1,7 +1,9 @@
-import { and, count, desc, eq, gt, lt, or, sql, sum } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNotNull, lt, or, sql, sum } from "drizzle-orm";
 import { Hono } from "hono";
 import {
 	auditLog,
+	courses,
+	lessonMaterials,
 	orgFiles,
 	organizations,
 	policies,
@@ -72,6 +74,8 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 		[newUsers],
 		[newOrgs],
 		[storage],
+		[materialStorage],
+		[coverStorage],
 		requests,
 		trials,
 	] = await Promise.all([
@@ -92,6 +96,11 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 			.from(organizations)
 			.where(gt(organizations.createdAt, monthAgo)),
 		db.select({ used: sum(orgFiles.sizeBytes) }).from(orgFiles),
+		db
+			.select({ used: sum(lessonMaterials.sizeBytes) })
+			.from(lessonMaterials)
+			.where(isNotNull(lessonMaterials.storageKey)),
+		db.select({ used: sum(courses.coverBytes) }).from(courses),
 		db
 			.select({
 				id: upgradeRequests.id,
@@ -144,7 +153,10 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 		activeUsers: activeUsers.total,
 		newUsers: newUsers.total,
 		newOrganizations: newOrgs.total,
-		storageUsed: Number(storage.used ?? 0),
+		storageUsed:
+			Number(storage.used ?? 0) +
+			Number(materialStorage.used ?? 0) +
+			Number(coverStorage.used ?? 0),
 		requests,
 		trials,
 		plans: [...planTotals].map(([name, total]) => ({ name, total })),
@@ -153,7 +165,7 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 
 superadminRoutes.get("/superadmin/organizations", async (c) => {
 	const db = c.get("db");
-	const [rows, members, files, policyCounts, requests] = await Promise.all([
+	const [rows, members, files, materials, covers, policyCounts, requests] = await Promise.all([
 		db
 			.select({
 				id: organizations.id,
@@ -195,6 +207,18 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 			.from(orgFiles)
 			.groupBy(orgFiles.organizationId),
 		db
+			.select({
+				organizationId: lessonMaterials.organizationId,
+				used: sum(lessonMaterials.sizeBytes),
+			})
+			.from(lessonMaterials)
+			.where(isNotNull(lessonMaterials.storageKey))
+			.groupBy(lessonMaterials.organizationId),
+		db
+			.select({ organizationId: courses.organizationId, used: sum(courses.coverBytes) })
+			.from(courses)
+			.groupBy(courses.organizationId),
+		db
 			.select({ organizationId: policies.organizationId, total: count() })
 			.from(policies)
 			.groupBy(policies.organizationId),
@@ -215,6 +239,8 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 	]);
 	const memberMap = new Map(members.map((row) => [row.organizationId, row]));
 	const fileMap = new Map(files.map((row) => [row.organizationId, row]));
+	const materialMap = new Map(materials.map((row) => [row.organizationId, row.used]));
+	const coverMap = new Map(covers.map((row) => [row.organizationId, row.used]));
 	const policyMap = new Map(policyCounts.map((row) => [row.organizationId, row.total]));
 	const requestMap = new Map(requests.map((row) => [row.organizationId, row]));
 	return c.json({
@@ -232,7 +258,10 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 				...limits,
 				activeMembers: Number(memberMap.get(row.id)?.active ?? 0),
 				members: memberMap.get(row.id)?.total ?? 0,
-				storageUsed: Number(fileMap.get(row.id)?.used ?? 0),
+				storageUsed:
+					Number(fileMap.get(row.id)?.used ?? 0) +
+					Number(materialMap.get(row.id) ?? 0) +
+					Number(coverMap.get(row.id) ?? 0),
 				fileCount: fileMap.get(row.id)?.total ?? 0,
 				policyCount: policyMap.get(row.id) ?? 0,
 				request: requestMap.get(row.id) ?? null,

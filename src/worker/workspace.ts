@@ -19,6 +19,7 @@ import {
 	type AppEnv,
 	type Membership,
 } from "./middleware";
+import { pendingCoursesFor } from "./courses";
 import { complianceOverview, pendingPoliciesFor } from "./policies";
 import type { Db } from "./db";
 import { cleanText, isEmail, isSafeLink, readJson } from "./validate";
@@ -386,7 +387,7 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 	const organizationId = c.get("org").organizationId;
 	const org = c.get("org");
 	const isManager = org.role === "manager" || org.role === "admin";
-	const [recent, [members], [departmentTotal], [invited], [posted], pendingPolicies, manager] =
+	const [recent, [members], [departmentTotal], [invited], [posted], pendingPolicies, pendingCourses, manager] =
 		await Promise.all([
 			db
 				.select({
@@ -421,6 +422,7 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 				.from(announcements)
 				.where(eq(announcements.organizationId, organizationId)),
 			pendingPoliciesFor(db, c.get("org"), c.get("user").id),
+			pendingCoursesFor(db, c.get("org"), c.get("user").id),
 			isManager ? managerDashboard(db, org) : Promise.resolve(null),
 		]);
 	return c.json({
@@ -430,6 +432,7 @@ workspace.get("/dashboard", requireUser, requireOrg, async (c) => {
 		invitations: invited.total,
 		announcements: posted.total,
 		pendingPolicies,
+		pendingCourses,
 		manager,
 	});
 });

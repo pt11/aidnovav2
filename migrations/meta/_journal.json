@@ -43,6 +43,20 @@
       "when": 1793415183349,
       "tag": "0005_brainy_jack_flag",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793417887762,
+      "tag": "0006_warm_miek",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793419905632,
+      "tag": "0007_rich_agent_zero",
+      "breakpoints": true
     }
   ]
 }

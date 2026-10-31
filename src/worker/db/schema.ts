@@ -13,6 +13,12 @@ const createdAt = () =>
 		.notNull()
 		.default(sql`(unixepoch() * 1000)`);
 
+const updatedAt = () =>
+	integer("updated_at", { mode: "timestamp_ms" })
+		.notNull()
+		.$defaultFn(() => new Date())
+		.$onUpdate(() => new Date());
+
 // Better Auth tables. Field names are the ones Better Auth expects.
 export const user = sqliteTable("user", {
 	id: text("id").primaryKey(),
@@ -492,6 +498,256 @@ export const upgradeRequests = sqliteTable(
 		uniqueIndex("upgrade_requests_one_pending")
 			.on(table.organizationId)
 			.where(sql`${table.status} = 'pending'`),
+	],
+);
+
+export const courses = sqliteTable(
+	"courses",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		description: text("description"),
+		objectives: text("objectives"),
+		duration: text("duration"),
+		status: text("status", { enum: ["draft", "published"] })
+			.notNull()
+			.default("draft"),
+		isMandatory: integer("is_mandatory", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		coverKey: text("cover_key"),
+		coverType: text("cover_type"),
+		coverBytes: integer("cover_bytes"),
+		quizTitle: text("quiz_title"),
+		passingScore: integer("passing_score").notNull().default(80),
+		certificateEnabled: integer("certificate_enabled", { mode: "boolean" })
+			.notNull()
+			.default(true),
+		createdBy: text("created_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [index("courses_org_idx").on(table.organizationId)],
+);
+
+export const courseModules = sqliteTable(
+	"course_modules",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: createdAt(),
+	},
+	(table) => [index("course_modules_course_idx").on(table.courseId)],
+);
+
+export const courseLessons = sqliteTable(
+	"course_lessons",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		moduleId: integer("module_id")
+			.notNull()
+			.references(() => courseModules.id, { onDelete: "cascade" }),
+		title: text("title").notNull(),
+		lessonType: text("lesson_type", { enum: ["reading", "document"] })
+			.notNull()
+			.default("reading"),
+		content: text("content"),
+		videoUrl: text("video_url"),
+		completionMethod: text("completion_method", {
+			enum: ["mark", "scroll", "open"],
+		})
+			.notNull()
+			.default("mark"),
+		estimatedTime: text("estimated_time"),
+		isRequired: integer("is_required", { mode: "boolean" })
+			.notNull()
+			.default(true),
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: createdAt(),
+		updatedAt: updatedAt(),
+	},
+	(table) => [
+		index("course_lessons_course_idx").on(table.courseId),
+		index("course_lessons_module_idx").on(table.moduleId),
+	],
+);
+
+export const lessonMaterials = sqliteTable(
+	"lesson_materials",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		lessonId: integer("lesson_id")
+			.notNull()
+			.references(() => courseLessons.id, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		mimeType: text("mime_type").notNull(),
+		// Null until a large video finishes uploading.
+		sizeBytes: integer("size_bytes"),
+		// An upload has its own key. A file chosen from the Hub only has a fileId.
+		storageKey: text("storage_key"),
+		fileId: integer("file_id").references(() => orgFiles.id, {
+			onDelete: "cascade",
+		}),
+		uploadId: text("upload_id"),
+		isRequired: integer("is_required", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		// Reported by the first viewer, as pages can only be counted in the browser.
+		pageCount: integer("page_count"),
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		index("lesson_materials_lesson_idx").on(table.lessonId),
+		index("lesson_materials_org_idx").on(table.organizationId),
+	],
+);
+
+export const quizQuestions = sqliteTable(
+	"quiz_questions",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		question: text("question").notNull(),
+		type: text("type", { enum: ["single", "multiple", "truefalse"] }).notNull(),
+		// [{ text, correct }]. Never sent to learners before they pass.
+		options: text("options").notNull(),
+		sortOrder: integer("sort_order").notNull().default(0),
+		createdAt: createdAt(),
+	},
+	(table) => [index("quiz_questions_course_idx").on(table.courseId)],
+);
+
+export const courseEnrollments = sqliteTable(
+	"course_enrollments",
+	{
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		// False for someone who only has a row because the course is mandatory.
+		isAssigned: integer("is_assigned", { mode: "boolean" })
+			.notNull()
+			.default(false),
+		assignedBy: text("assigned_by").references(() => user.id, {
+			onDelete: "set null",
+		}),
+		startedAt: integer("started_at", { mode: "timestamp_ms" }),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+		createdAt: createdAt(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.courseId, table.userId] }),
+		index("course_enrollments_user_idx").on(table.userId),
+	],
+);
+
+export const lessonProgress = sqliteTable(
+	"lesson_progress",
+	{
+		lessonId: integer("lesson_id")
+			.notNull()
+			.references(() => courseLessons.id, { onDelete: "cascade" }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		primaryKey({ columns: [table.lessonId, table.userId] }),
+		index("lesson_progress_course_idx").on(table.courseId, table.userId),
+	],
+);
+
+export const materialProgress = sqliteTable(
+	"material_progress",
+	{
+		materialId: integer("material_id")
+			.notNull()
+			.references(() => lessonMaterials.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		viewedPages: text("viewed_pages").notNull().default("[]"),
+		completedAt: integer("completed_at", { mode: "timestamp_ms" }),
+	},
+	(table) => [primaryKey({ columns: [table.materialId, table.userId] })],
+);
+
+export const quizAttempts = sqliteTable(
+	"quiz_attempts",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		courseId: integer("course_id")
+			.notNull()
+			.references(() => courses.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		score: integer("score").notNull(),
+		correct: integer("correct").notNull(),
+		total: integer("total").notNull(),
+		passed: integer("passed", { mode: "boolean" }).notNull(),
+		// The questions as they were, so later edits don't change a past result.
+		review: text("review").notNull(),
+		createdAt: createdAt(),
+	},
+	(table) => [index("quiz_attempts_course_idx").on(table.courseId, table.userId)],
+);
+
+// Copies its names, so a certificate survives the course or person changing.
+export const certificates = sqliteTable(
+	"certificates",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		courseId: integer("course_id").references(() => courses.id, {
+			onDelete: "set null",
+		}),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		recipientName: text("recipient_name").notNull(),
+		courseTitle: text("course_title").notNull(),
+		organizationName: text("organization_name").notNull(),
+		score: integer("score"),
+		code: text("code").notNull(),
+		issuedAt: integer("issued_at", { mode: "timestamp_ms" })
+			.notNull()
+			.$defaultFn(() => new Date()),
+	},
+	(table) => [
+		uniqueIndex("certificates_course_user").on(table.courseId, table.userId),
+		index("certificates_user_idx").on(table.userId),
 	],
 );
 

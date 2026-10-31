@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { assistantRoutes } from "./assistant";
+import { courseRoutes } from "./courses";
 import { createAuth } from "./auth";
 import { requireSameOrigin, withDb, type AppEnv } from "./middleware";
 import { fileRoutes } from "./files";
@@ -23,6 +24,7 @@ app.route("/api", workspace);
 app.route("/api", policyRoutes);
 app.route("/api", fileRoutes);
 app.route("/api", assistantRoutes);
+app.route("/api", courseRoutes);
 app.route("/api", planRoutes);
 app.route("/api", superadminRoutes);
 

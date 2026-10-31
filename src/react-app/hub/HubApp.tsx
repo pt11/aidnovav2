@@ -38,6 +38,16 @@ import {
 	SuperStoragePage,
 	SuperUsersPage,
 } from "./pages/SuperAdmin";
+import { CourseBuilderPage, CourseLearnersPage } from "./pages/CourseBuilder";
+import {
+	CertificatePage,
+	CourseLessonPage,
+	CourseOverviewPage,
+	CourseQuizPage,
+} from "./pages/CourseLearn";
+import { CoursesPage } from "./pages/Courses";
+import { LessonEditorPage } from "./pages/LessonEditor";
+import { QuizBuilderPage } from "./pages/QuizBuilder";
 import { UsersPage } from "./pages/Users";
 import { canManage, WorkspaceShell } from "./Shell";
 import { buttonClass, StartupScreen, StatePanel } from "./ui";
@@ -217,7 +227,40 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					{({ id }) => <PolicyDetailPage key={id} id={id} canManage={manager} />}
 				</Route>
 				<Route path="/courses">
-					<LaterPage labelKey="nav.courses" />
+					<CoursesPage canManage={manager} />
+				</Route>
+				<Route path="/courses/:id/manage/lessons/:lessonId">
+					{({ id, lessonId }) =>
+						manager ? <CourseBuilderPage key={id} id={id} lessonId={lessonId} /> : <NoAccessPage />
+					}
+				</Route>
+				<Route path="/courses/:id/manage">
+					{({ id }) => (manager ? <CourseBuilderPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
+				<Route path="/courses/:id/learners">
+					{({ id }) => (manager ? <CourseLearnersPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
+				<Route path="/courses/:id/quiz/edit">
+					{({ id }) => (manager ? <QuizBuilderPage key={id} id={id} /> : <NoAccessPage />)}
+				</Route>
+				<Route path="/courses/:id/quiz">
+					{({ id }) => <CourseQuizPage key={id} id={id} />}
+				</Route>
+				<Route path="/courses/:id/lessons/:lessonId/edit">
+					{({ id, lessonId }) =>
+						manager ? <LessonEditorPage key={lessonId} id={id} lessonId={lessonId} /> : <NoAccessPage />
+					}
+				</Route>
+				<Route path="/courses/:id/lessons/:lessonId">
+					{({ id, lessonId }) => (
+						<CourseLessonPage key={`${id}-${lessonId}`} id={id} lessonId={lessonId} />
+					)}
+				</Route>
+				<Route path="/courses/:id">
+					{({ id }) => <CourseOverviewPage key={id} id={id} canManage={manager} />}
+				</Route>
+				<Route path="/certificates/:id">
+					{({ id }) => <CertificatePage key={id} id={id} />}
 				</Route>
 				<Route path="/files">
 					<FilesPage canManage={manager} />

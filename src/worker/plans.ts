@@ -1,9 +1,11 @@
-import { and, count, eq, gt, sql, sum } from "drizzle-orm";
+import { and, count, eq, gt, isNotNull, sql, sum } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Db } from "./db";
 import {
 	auditLog,
+	courses,
 	invitations,
+	lessonMaterials,
 	orgFiles,
 	organizations,
 	subscriptionPlans,
@@ -97,12 +99,29 @@ export async function getSeatUsage(db: Db, organizationId: number) {
 	return { active: active.total, pending: pending.total };
 }
 
+// Counts everything an organization keeps in storage, including course uploads.
+// A file chosen from the Hub has no key of its own, so it isn't counted twice.
 export async function getStorageUsed(db: Db, organizationId: number) {
-	const [row] = await db
-		.select({ used: sum(orgFiles.sizeBytes) })
-		.from(orgFiles)
-		.where(eq(orgFiles.organizationId, organizationId));
-	return Number(row.used ?? 0);
+	const [[files], [materials], [covers]] = await Promise.all([
+		db
+			.select({ used: sum(orgFiles.sizeBytes) })
+			.from(orgFiles)
+			.where(eq(orgFiles.organizationId, organizationId)),
+		db
+			.select({ used: sum(lessonMaterials.sizeBytes) })
+			.from(lessonMaterials)
+			.where(
+				and(
+					eq(lessonMaterials.organizationId, organizationId),
+					isNotNull(lessonMaterials.storageKey),
+				),
+			),
+		db
+			.select({ used: sum(courses.coverBytes) })
+			.from(courses)
+			.where(eq(courses.organizationId, organizationId)),
+	]);
+	return Number(files.used ?? 0) + Number(materials.used ?? 0) + Number(covers.used ?? 0);
 }
 
 export const planRoutes = new Hono<AppEnv>();

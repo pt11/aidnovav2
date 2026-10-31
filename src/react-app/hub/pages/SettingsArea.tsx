@@ -14,6 +14,7 @@ import {
 	type Membership,
 } from "../api";
 import { useI18n } from "../i18n";
+import { MyCertificates } from "./CourseLearn";
 import { useTheme } from "../Shell";
 import {
 	Alert,
@@ -982,6 +983,7 @@ export function SettingsProfilePage({ me, org }: { me: Me; org: Membership }) {
 			{profile.isPending && <PageLoading />}
 			{profile.isError && <PageError onRetry={() => profile.refetch()} />}
 			{profile.data && <ProfileForm me={me} profile={profile.data} />}
+			<MyCertificates />
 		</SettingsLayout>
 	);
 }
