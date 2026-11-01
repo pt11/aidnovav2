@@ -575,11 +575,19 @@ const SITE_PAGES = new Set([
 ]);
 
 const SitePages = lazy(() => import("./SitePages"));
+const Guides = lazy(() => import("./Guides"));
 
 function Landing() {
 	const path = window.location.pathname.replace(/\/+$/, "");
 	const LegalPage = LEGAL_PAGES[path];
 	if (LegalPage) return <LegalPage />;
+	if (/^(\/my)?\/guides(\/|$)/.test(path)) {
+		return (
+			<Suspense fallback={null}>
+				<Guides path={path} />
+			</Suspense>
+		);
+	}
 	if (SITE_PAGES.has(path) || path.startsWith("/blog/")) {
 		return (
 			<Suspense fallback={null}>

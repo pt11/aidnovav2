@@ -147,7 +147,12 @@ function setHeadLink(rel: string, href: string, hreflang?: string) {
 
 // The English and Myanmar landing pages point at each other so search engines
 // show people the one in their language. Other pages are English only.
-export function usePageMeta(title: string, description: string, lang: Lang = "en", alternates = false) {
+export function usePageMeta(
+	title: string,
+	description: string,
+	lang: Lang = "en",
+	alternates: boolean | { en: string; my: string } = false,
+) {
 	useEffect(() => {
 		document.title = title;
 		document.documentElement.lang = lang;
@@ -155,8 +160,9 @@ export function usePageMeta(title: string, description: string, lang: Lang = "en
 		const origin = window.location.origin;
 		setHeadLink("canonical", origin + (window.location.pathname.replace(/\/+$/, "") || "/"));
 		if (alternates) {
-			setHeadLink("alternate", `${origin}/`, "en");
-			setHeadLink("alternate", `${origin}/my`, "my");
+			const paths = alternates === true ? { en: "/", my: "/my" } : alternates;
+			setHeadLink("alternate", `${origin}${paths.en}`, "en");
+			setHeadLink("alternate", `${origin}${paths.my}`, "my");
 		}
 	}, [title, description, lang, alternates]);
 }
@@ -170,6 +176,7 @@ const NAV_COPY = {
 	hub: "Employee Hub",
 	pricing: "Pricing",
 	blog: "Blog",
+	guides: "Guides",
 	faq: "FAQ",
 	signIn: "Sign in",
 	signUp: "Start free trial",
@@ -199,7 +206,7 @@ interface MegaModule {
 	links: { label: string; href: string }[];
 }
 
-function megaModules(lang: Lang): MegaModule[] {
+function megaModules(lang: Lang, anchorBase: string): MegaModule[] {
 	const my = lang === "my";
 	return [
 		{
@@ -211,9 +218,9 @@ function megaModules(lang: Lang): MegaModule[] {
 			early: false,
 			href: "/employee-hub",
 			links: [
-				{ label: "Policies", href: my ? "#features" : "/features#policies" },
-				{ label: "Courses", href: my ? "#features" : "/features#learning" },
-				{ label: "Files & announcements", href: my ? "#hub" : "/features#hub-files" },
+				{ label: "Policies", href: my ? `${anchorBase}#features` : "/features#policies" },
+				{ label: "Courses", href: my ? `${anchorBase}#features` : "/features#learning" },
+				{ label: "Files & announcements", href: my ? `${anchorBase}#hub` : "/features#hub-files" },
 			],
 		},
 		{
@@ -295,11 +302,24 @@ function NavDropdown({
 	);
 }
 
-export type NavPage = "features" | "hub" | "projects" | "capacity" | "ai" | "pricing" | "blog" | "faq";
+export type NavPage = "features" | "hub" | "projects" | "capacity" | "ai" | "pricing" | "blog" | "guides" | "faq";
 
 // On the landing page some links jump to its sections. The Myanmar page keeps
 // people on the page they can read wherever it has that section.
-export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page?: NavPage; home?: boolean }) {
+// anchorBase is for Myanmar pages other than the landing page, whose links have to go back to it.
+export function SiteNav({
+	lang = "en",
+	page,
+	home = false,
+	anchorBase = "",
+	languageLinks = { en: "/", my: "/my" },
+}: {
+	lang?: Lang;
+	page?: NavPage;
+	home?: boolean;
+	anchorBase?: string;
+	languageLinks?: { en: string; my: string };
+}) {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [openPanel, setOpenPanel] = useState<string | null>(null);
 	const toggleRef = useRef<HTMLButtonElement>(null);
@@ -371,7 +391,7 @@ export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page
 							<div className="mega">
 								<div className="mega-grid">
 									<div className="mega-modules">
-										{megaModules(lang).map((module) => (
+										{megaModules(lang, anchorBase).map((module) => (
 											<div key={module.key} className={page === module.key ? "mega-module is-current" : "mega-module"}>
 												<a
 													className="mega-main"
@@ -401,13 +421,13 @@ export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page
 										))}
 									</div>
 									<div className="mega-side">
-										<a className="mega-promo" href={my ? "#features" : "/features"} onClick={closeAll}>
+										<a className="mega-promo" href={my ? `${anchorBase}#features` : "/features"} onClick={closeAll}>
 											<img src="/blog-mark.webp" alt="" />
 											<span className="mega-promo-label">{copy.allFeatures}</span>
 											<b>{copy.seeEverything}</b>
 											<span className="mega-promo-cta">{copy.explore}</span>
 										</a>
-										<a className="mega-compare" href={my ? "#pricing" : "/pricing"} onClick={closeAll}>
+										<a className="mega-compare" href={my ? `${anchorBase}#pricing` : "/pricing"} onClick={closeAll}>
 											{copy.compare}
 											<span aria-hidden="true">→</span>
 										</a>
@@ -427,7 +447,7 @@ export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page
 						</NavDropdown>
 						<a
 							className="nav-plain"
-							href={my ? "#pricing" : "/pricing"}
+							href={my ? `${anchorBase}#pricing` : "/pricing"}
 							aria-current={page === "pricing" ? "page" : undefined}
 							onClick={closeAll}
 						>
@@ -436,9 +456,12 @@ export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page
 						<a className="nav-plain" href="/blog" aria-current={page === "blog" ? "page" : undefined} onClick={closeAll}>
 							{copy.blog}
 						</a>
+						<a className="nav-plain" href={my ? "/my/guides" : "/guides"} aria-current={page === "guides" ? "page" : undefined} onClick={closeAll}>
+							{copy.guides}
+						</a>
 						<a
 							className="nav-plain"
-							href={my ? "#faq" : "/faq"}
+							href={my ? `${anchorBase}#faq` : "/faq"}
 							aria-current={page === "faq" ? "page" : undefined}
 							onClick={closeAll}
 						>
@@ -447,10 +470,10 @@ export function SiteNav({ lang = "en", page, home = false }: { lang?: Lang; page
 					</div>
 					<div className="nav-actions">
 						<div className="segmented" role="group" aria-label={copy.language}>
-							<a href="/" aria-current={my ? undefined : "true"}>
+							<a href={languageLinks.en} aria-current={my ? undefined : "true"}>
 								EN
 							</a>
-							<a href="/my" lang="my" aria-current={my ? "true" : undefined}>
+							<a href={languageLinks.my} lang="my" aria-current={my ? "true" : undefined}>
 								မြန်မာ
 							</a>
 						</div>
@@ -491,7 +514,7 @@ const FOOTER_TAGLINE = {
 	my: "NGO များ၊ INGO များနှင့် ခေတ်မီအဖွဲ့အစည်းများအတွက် မူဝါဒ (Policy) နှင့် ဝန်ထမ်းသင်တန်း စီမံခန့်ခွဲရေး ပလက်ဖောင်း။",
 };
 
-export function SiteFooter({ lang = "en" }: { lang?: Lang }) {
+export function SiteFooter({ lang = "en", anchorBase = "" }: { lang?: Lang; anchorBase?: string }) {
 	const nav = NAV_COPY;
 	const my = lang === "my";
 	return (
@@ -509,21 +532,22 @@ export function SiteFooter({ lang = "en" }: { lang?: Lang }) {
 				</div>
 				<div className="site-footer-links">
 					<strong>Product</strong>
-					<a href={my ? "#features" : "/features"}>{nav.features}</a>
-					<a href={my ? "#pricing" : "/pricing"}>{nav.pricing}</a>
+					<a href={my ? `${anchorBase}#features` : "/features"}>{nav.features}</a>
+					<a href={my ? `${anchorBase}#pricing` : "/pricing"}>{nav.pricing}</a>
 					{my ? <a href="/">English</a> : <a href="/my" lang="my">မြန်မာ</a>}
 				</div>
 				<div className="site-footer-links">
 					<strong>Platform</strong>
-					<a href={my ? "#hub" : "/employee-hub"}>{nav.hub}</a>
+					<a href={my ? `${anchorBase}#hub` : "/employee-hub"}>{nav.hub}</a>
 					<a href="/projects">{nav.projects}</a>
 					<a href="/capacity-building">{nav.capacity}</a>
 					<a href="/ai">{nav.ai}</a>
 				</div>
 				<div className="site-footer-links">
 					<strong>Resources</strong>
+					<a href={my ? "/my/guides" : "/guides"}>{nav.guides}</a>
 					<a href="/blog">{nav.blog}</a>
-					<a href={my ? "#faq" : "/faq"}>{nav.faq}</a>
+					<a href={my ? `${anchorBase}#faq` : "/faq"}>{nav.faq}</a>
 					<a href={FACEBOOK_URL}>Facebook</a>
 				</div>
 				<div className="site-footer-links">

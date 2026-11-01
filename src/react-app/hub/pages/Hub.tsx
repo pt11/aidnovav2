@@ -18,6 +18,7 @@ import { api, type Membership } from "../api";
 import {
 	ASSISTANT_ERRORS,
 	sourceLinks,
+	SourceLink,
 	useAssistantChat,
 	type AssistantSources as Sources,
 	type ChatMessage,
@@ -120,13 +121,10 @@ function SourceLinks({ sources }: { sources: Sources }) {
 		<ul className="mt-3 flex flex-wrap gap-2">
 			{links.map((link) => (
 				<li key={link.key} className="min-w-0">
-					<Link
-						href={link.href}
-						className="flex items-center gap-1.5 break-words rounded-md border border-border px-2.5 py-1 text-[13px] text-foreground no-underline hover:bg-muted"
-					>
+					<SourceLink source={link} className="flex items-center gap-1.5 break-words rounded-md border border-border px-2.5 py-1 text-[13px] text-foreground no-underline hover:bg-muted">
 						<FileText size={14} aria-hidden="true" className="shrink-0 text-selected-foreground" />
 						{link.label}
-					</Link>
+					</SourceLink>
 				</li>
 			))}
 		</ul>
@@ -274,6 +272,11 @@ export function HubPage({ org }: { org: Membership }) {
 									<div className="mt-2">
 										<Alert>{t(ASSISTANT_ERRORS[chat.errorCode] ?? "hub.assistant_failed")}</Alert>
 									</div>
+								) : chat.partial ? (
+									<>
+										<span role="status" className="sr-only">{t("hub.assistant_thinking")}</span>
+										<p aria-hidden="true" className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-[26px]">{chat.partial}</p>
+									</>
 								) : (
 									<p role="status" className="mt-2 text-muted-foreground">
 										{t("hub.assistant_thinking")}

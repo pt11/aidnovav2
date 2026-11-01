@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { ArrowUp, FileText, FolderOpen, Maximize2, Megaphone, Minimize2, Plus, Search, Sparkles, X, type LucideIcon } from "lucide-react";
 import { Link } from "wouter";
-import { api, ApiError } from "./api";
+import { ApiError } from "./api";
 import { useI18n } from "./i18n";
-import { Alert, buttonClass } from "./ui";
+import { Alert, buttonClass, NovaStar, siteUrl } from "./ui";
 
 export interface AssistantSources {
 	policies: { id: number; title: string }[];
 	files: { id: number; name: string; folderId: number | null }[];
 	announcements: { id: number; title: string }[];
+	guides?: { title: string; path: string }[];
 }
 
 export interface ChatMessage {
@@ -19,6 +20,39 @@ export interface ChatMessage {
 }
 
 const MAX_HISTORY = 10;
+
+// The answer arrives as one JSON object per line: parts of the text, then the
+// finished answer with its sources, or a code if it failed.
+async function askAssistant(history: ChatMessage[], onText: (text: string) => void, signal: AbortSignal) {
+	const response = await fetch("/api/assistant", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ messages: history.map(({ role, content }) => ({ role, content })), stream: true }),
+		signal,
+	});
+	if (!response.ok || !response.body) {
+		const data = (await response.json().catch(() => null)) as { code?: string; message?: string } | null;
+		throw new ApiError(response.status, data?.code ?? "UNKNOWN", data?.message ?? "Request failed");
+	}
+	const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+	let pending = "";
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		pending += value;
+		const lines = pending.split("\n");
+		pending = lines.pop() ?? "";
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			const event = JSON.parse(line) as { text?: string; answer?: string; sources?: AssistantSources; code?: string };
+			if (event.code) throw new ApiError(502, event.code, "The assistant couldn't answer.");
+			if (event.text) onText(event.text);
+			if (event.answer && event.sources) return { answer: event.answer, sources: event.sources };
+		}
+	}
+	// The connection dropped before the answer finished.
+	throw new ApiError(502, "ASSISTANT_FAILED", "The assistant couldn't answer.");
+}
 const SUPPORT_EMAIL = "helloaidnova@gmail.com";
 export const ASSISTANT_ERRORS: Record<string, string> = {
 	ASSISTANT_LIMIT: "hub.assistant_limit",
@@ -28,21 +62,33 @@ export const ASSISTANT_ERRORS: Record<string, string> = {
 // One conversation with the assistant, kept in memory until it's cleared.
 export function useAssistantChat() {
 	const [messages, setMessages] = useState<ChatMessage[]>([]);
+	const [partial, setPartial] = useState("");
+	const running = useRef<AbortController | null>(null);
 	const ask = useMutation({
-		mutationFn: (history: ChatMessage[]) =>
-			api<{ answer: string; sources: AssistantSources }>("/assistant", {
-				method: "POST",
-				body: {
-					messages: history.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content })),
+		mutationFn: (history: ChatMessage[]) => {
+			const controller = new AbortController();
+			running.current = controller;
+			return askAssistant(
+				history.slice(-MAX_HISTORY),
+				(text) => {
+					if (!controller.signal.aborted) setPartial((current) => current + text);
 				},
-			}),
+				controller.signal,
+			);
+		},
 	});
 
+	useEffect(() => () => running.current?.abort(), []);
+
 	function request(history: ChatMessage[]) {
+		setPartial("");
 		// Set per call so an answer that arrives after "New conversation" is dropped.
 		ask.mutate(history, {
-			onSuccess: (data) =>
-				setMessages((current) => [...current, { role: "assistant", content: data.answer, sources: data.sources }]),
+			onSuccess: (data) => {
+				setPartial("");
+				setMessages((current) => [...current, { role: "assistant", content: data.answer, sources: data.sources }]);
+			},
+			onError: () => setPartial(""),
 		});
 	}
 
@@ -66,12 +112,14 @@ export function useAssistantChat() {
 	}
 
 	function reset() {
+		running.current?.abort();
 		ask.reset();
+		setPartial("");
 		setMessages([]);
 	}
 
 	const errorCode = ask.error instanceof ApiError ? ask.error.code : "";
-	return { messages, send, retry, reset, pending: ask.isPending, failed: ask.isError, errorCode };
+	return { messages, partial, send, retry, reset, pending: ask.isPending, failed: ask.isError, errorCode };
 }
 
 export function sourceLinks(sources: AssistantSources) {
@@ -91,19 +139,38 @@ export function sourceLinks(sources: AssistantSources) {
 			href: "/",
 			label: announcement.title,
 		})),
+		// Guides live on the public site, so they open in their own tab.
+		...(sources.guides ?? []).map((guide) => ({
+			key: `guide-${guide.path}`,
+			href: siteUrl(guide.path),
+			label: guide.title,
+			external: true,
+		})),
 	];
 }
 
-function Orbs({ small = false }: { small?: boolean }) {
+export function SourceLink({
+	source,
+	className,
+	onClick,
+	children,
+}: {
+	source: ReturnType<typeof sourceLinks>[number];
+	className: string;
+	onClick?: () => void;
+	children: ReactNode;
+}) {
+	if ("external" in source) {
+		return (
+			<a href={source.href} target="_blank" rel="noreferrer" className={className}>
+				{children}
+			</a>
+		);
+	}
 	return (
-		<div aria-hidden="true" className={`relative mx-auto ${small ? "h-[110px] w-[176px]" : "h-[150px] w-[240px]"}`}>
-			<span className="absolute left-0 top-[42%] aspect-square w-[26%] rounded-full bg-[radial-gradient(circle_at_35%_30%,#eef4ff,#9ebfff_55%,#4e81ef)]" />
-			<span className="absolute left-[11%] top-[16%] aspect-square w-[34%] rounded-full bg-[radial-gradient(circle_at_35%_30%,#fff,#b9d2ff_50%,#4e81ef)]" />
-			<span className="absolute right-0 top-[24%] aspect-square w-[31%] rounded-full bg-[radial-gradient(circle_at_30%_30%,#8a5cf5,#753ff3_55%,#3b1c99)]" />
-			<span className="absolute left-[26%] top-0 aspect-square w-[54%] overflow-hidden rounded-full bg-[radial-gradient(circle_at_32%_28%,#fff_0%,#cfe0ff_22%,#4e81ef_58%,#0066f5_100%)] shadow-[0_18px_40px_rgba(0,102,245,0.25)]">
-				<img src="/blog-mark.webp" alt="" className="absolute -left-[12%] -top-[8%] h-[120%] w-auto max-w-none opacity-90" />
-			</span>
-		</div>
+		<Link href={source.href} onClick={onClick} className={className}>
+			{children}
+		</Link>
 	);
 }
 
@@ -152,6 +219,12 @@ export function AskPanel({
 	useEffect(() => {
 		scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
 	}, [chat.messages.length, chat.pending, chat.failed]);
+
+	// Follows a growing answer, unless the person has scrolled up to read.
+	useEffect(() => {
+		const box = scroller.current;
+		if (box && box.scrollHeight - box.scrollTop - box.clientHeight < 120) box.scrollTo({ top: box.scrollHeight });
+	}, [chat.partial]);
 
 	function submit(event?: FormEvent) {
 		event?.preventDefault();
@@ -237,8 +310,8 @@ export function AskPanel({
 						</div>
 						{!started ? (
 							<div className="flex flex-col items-center px-5 pb-4 pt-7 text-center">
-								<Orbs />
-								<h3 className="mt-5 text-2xl font-semibold leading-8 tracking-tight">
+								<NovaStar width={64} strokeWidth={28} className="text-primary" />
+								<h3 className="mt-4 text-2xl font-semibold leading-8 tracking-tight">
 									{t(greeting, { name: name.trim() })}
 								</h3>
 								<p className="mt-1 text-base text-muted-foreground">{t("ask.today")}</p>
@@ -283,15 +356,10 @@ export function AskPanel({
 													<div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
 														<span className="text-xs text-muted-foreground">{t("ask.sources")}</span>
 														{sourceLinks(message.sources).map((source) => (
-															<Link
-																key={source.key}
-																href={source.href}
-																onClick={showPage}
-																className="inline-flex max-w-full items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-foreground no-underline hover:bg-muted"
-															>
+															<SourceLink key={source.key} source={source} onClick={showPage} className="inline-flex max-w-full items-center gap-1 rounded-md border border-border px-2 py-0.5 text-xs text-foreground no-underline hover:bg-muted">
 																<FileText size={12} aria-hidden="true" className="shrink-0 text-primary" />
 																<span className="truncate">{source.label}</span>
-															</Link>
+															</SourceLink>
 														))}
 													</div>
 												)}
@@ -299,7 +367,17 @@ export function AskPanel({
 										</div>
 									),
 								)}
-								{chat.pending && (
+								{chat.pending && chat.partial && (
+									<div className="flex items-start gap-2.5">
+										<AnswerMark />
+										<div className="min-w-0 flex-1 rounded-[4px_16px_16px_16px] border border-border bg-card px-3.5 py-3">
+											<span role="status" className="sr-only">{t("ask.thinking")}</span>
+											{/* Screen readers get the finished answer, not every few words of it. */}
+											<p aria-hidden="true" className="whitespace-pre-wrap break-words text-[15px] leading-6">{chat.partial}</p>
+										</div>
+									</div>
+								)}
+								{chat.pending && !chat.partial && (
 									<div className="flex items-start gap-2.5">
 										<AnswerMark />
 										<div role="status" className="rounded-[4px_16px_16px_16px] border border-border bg-card px-3.5 py-3">

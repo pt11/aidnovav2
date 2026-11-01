@@ -59,8 +59,14 @@ class Client {
 			const index = pair.indexOf("=");
 			this.cookies.set(pair.slice(0, index), pair.slice(index + 1));
 		}
-		const data = await response.json().catch(() => null);
-		return { status: response.status, data };
+		const text = await response.text();
+		let data = null;
+		try {
+			data = JSON.parse(text);
+		} catch {
+			// Not JSON: an empty body, or a stream of JSON lines.
+		}
+		return { status: response.status, data, text, type: response.headers.get("content-type") };
 	}
 
 	// For routes whose body is a file rather than JSON.
@@ -1349,7 +1355,7 @@ describe("assistant", () => {
 
 	test("another organization gets nothing", async () => {
 		const { data } = await ask(outsider, "Zebrafish?");
-		assert.deepEqual(data.sources, { policies: [], files: [], announcements: [] });
+		assert.deepEqual(data.sources, { policies: [], files: [], announcements: [], guides: [] });
 	});
 
 	test("the browser can't choose the organization", async () => {
@@ -3599,5 +3605,62 @@ describe("skills, team overview and directory", () => {
 		assert.equal((await lead.request("/api/capacity/team-overview/exported", { method: "POST", body: { count: 3 } })).status, 200);
 		assert.equal((await staff.request("/api/capacity/team-overview/exported", { method: "POST", body: {} })).status, 403);
 		assert.equal((await admin.request("/api/capacity/team-overview")).data.staff, 1, "an admin only sees people they review: here, the lead with no team");
+	});
+});
+
+describe("assistant streaming", () => {
+	let reader, readerOrg;
+	const ask = (client, messages, stream = true) => client.request("/api/assistant", { method: "POST", body: { messages, stream } });
+	const events = (result) => result.text.trim().split("\n").map((line) => JSON.parse(line));
+
+	before(async () => {
+		reader = await new Client().signUpAndIn("streamer");
+		readerOrg = (await reader.createOrg("streamorg")).data.id;
+	});
+
+	test("the answer arrives in parts and ends with the finished answer and sources", async () => {
+		const result = await ask(reader, [{ role: "user", content: "hello" }]);
+		assert.equal(result.status, 200);
+		assert.match(result.type, /application\/x-ndjson/);
+		const lines = events(result);
+		const final = lines.at(-1);
+		assert.equal(lines.slice(0, -1).map((line) => line.text).join(""), final.answer);
+		assert.ok(final.sources.policies);
+		assert.ok(readerOrg);
+	});
+
+	test("refusals are still ordinary errors, and asking without streaming still works", async () => {
+		assert.equal((await ask(reader, [{ role: "system", content: "x" }])).status, 400);
+		assert.equal((await ask(new Client(), [{ role: "user", content: "hi" }])).status, 401);
+		const plain = await ask(reader, [{ role: "user", content: "hello" }], false);
+		assert.ok(plain.data.answer);
+		assert.ok(plain.data.sources);
+	});
+});
+
+describe("assistant and the guides", () => {
+	let reader;
+	const ask = (content, stream = false) => reader.request("/api/assistant", { method: "POST", body: { messages: [{ role: "user", content }], stream } });
+
+	before(async () => {
+		reader = await new Client().signUpAndIn("guidereader");
+		await reader.createOrg("guideorg");
+	});
+
+	test("a question about using AidNova finds the guide, in the question's language", async () => {
+		const english = (await ask("How do I invite my team?")).data.sources.guides;
+		assert.ok(english.some((guide) => guide.path === "/guides/getting-started/add-your-team"), JSON.stringify(english));
+		assert.ok(english.length <= 2);
+		const burmese = (await ask("ဝန်ထမ်းတွေကို ဘယ်လို ဖိတ်ရမလဲ")).data.sources.guides;
+		assert.ok(burmese.some((guide) => guide.path === "/my/guides/getting-started/add-your-team"), JSON.stringify(burmese));
+		const phone = (await ask("How do I install it on my iPhone?")).data.sources.guides;
+		assert.ok(phone.some((guide) => guide.path.endsWith("/install-the-app")), JSON.stringify(phone));
+	});
+
+	test("an unrelated question links no guide, and streaming carries guides too", async () => {
+		assert.deepEqual((await ask("Zebrafish xylophone")).data.sources.guides, []);
+		const stream = await ask("How do I change someone's role?", true);
+		const final = stream.text.trim().split("\n").map((line) => JSON.parse(line)).at(-1);
+		assert.ok(final.sources.guides.some((guide) => guide.path.endsWith("/roles")), JSON.stringify(final.sources.guides));
 	});
 });

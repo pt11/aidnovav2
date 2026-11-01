@@ -72,3 +72,12 @@ button {
 		scroll-behavior: auto;
 	}
 }
+
+/* iOS zooms the page when a field with text under 16px gets focus. */
+@media (pointer: coarse) {
+	input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"]),
+	textarea,
+	select {
+		font-size: 16px !important;
+	}
+}
