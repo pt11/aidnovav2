@@ -496,7 +496,7 @@ export function ProjectsPage({ me }: { me: string }) {
 		queryKey: PROJECTS_KEY,
 		queryFn: () => api<{ projects: ProjectSummary[]; canCreate: boolean }>("/projects"),
 	});
-	if (list.isPending) return <PageLoading />;
+	if (list.isPending) return <PageLoading variant="cards" />;
 	if (list.isError) return <PageError onRetry={() => list.refetch()} />;
 	const all = list.data.projects;
 	const text = query.trim().toLowerCase();

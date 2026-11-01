@@ -852,19 +852,15 @@ function AiPage() {
 			>
 				<PhoneShowcase name="mobile-ask" alt="The Ask AidNova assistant on a phone, offering to find a policy or explain one" tone="blue" />
 			</ShowRow>
-			<ShowRow
-				eyebrow="Early access"
-				title="Project Intelligence."
-				lead="Ask about a project’s status, budget, outputs and reports. Numbers come from your records, not guesses, and each one is labelled. We’re building this now."
-				points={["“Which reports are overdue?”", "“Compare people reached in Q1 and Q2.”", "When two files disagree, it shows you both"]}
-			>
-				<Showcase name="project-ai" alt="Project Intelligence answering a question about a project’s status, with each fact labelled and its source shown" tone="green">
-					<Float at="br">
-						<span className="status-pill status-warning">Reported</span>
-						<FloatText title="$46,500 left of $120,000" text="Budget.xlsx v3 · row 14" />
-					</Float>
-				</Showcase>
-			</ShowRow>
+			<section id="project-intelligence" className="section">
+				<Reveal>
+					<div className="coming-soon-card">
+						<span className="eyebrow">Coming soon</span>
+						<h2 className="section-title">Project Intelligence.</h2>
+						<p>We’re planning an assistant for your projects, so you can ask about status, budget, outputs and reports and see where each number came from. It isn’t available yet.</p>
+					</div>
+				</Reveal>
+			</section>
 			<section id="how" className="section">
 				<Reveal>
 					<div className="dark-panel">
@@ -878,8 +874,6 @@ function AiPage() {
 									{ icon: "eyeOff", title: "Says when it doesn’t know", text: "If your content doesn’t answer the question, it tells you to ask a manager — it doesn’t make something up." },
 									{ icon: "lock", title: "Only reads what you can open", text: "If you can’t open a file, the AI can’t read it for you either." },
 									{ icon: "shield", title: "Never decides for you", text: "It answers questions. It can’t approve, publish or change anything." },
-									{ icon: "check", title: "Says what’s verified", text: "Coming with Project Intelligence: each fact labelled official, verified, reported or estimated." },
-									{ icon: "copy", title: "Flags conflicts", text: "Coming with Project Intelligence: when two files disagree, it shows both numbers." },
 								] as { icon: IconName; title: string; text: string }[]
 							).map((rule) => (
 								<div key={rule.title}>

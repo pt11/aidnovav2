@@ -466,7 +466,7 @@ export function CoursesPage({ canManage }: { canManage: boolean }) {
 					) : undefined
 				}
 			/>
-			{courses.isPending && <PageLoading />}
+			{courses.isPending && <PageLoading variant="inline" />}
 			{courses.isError && <PageError onRetry={() => courses.refetch()} />}
 			{courses.data && (
 				<>

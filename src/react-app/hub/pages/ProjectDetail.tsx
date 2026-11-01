@@ -1,25 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, SearchX, Trash2 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation, useSearch } from "wouter";
 import { ProjectDashboardTab } from "./ProjectDashboard";
 import { FileBadge, ProjectFilesTab, useProjectFiles } from "./ProjectFiles";
 import { periodLabel, ProjectReportsTab, ReportChip, useProjectReports } from "./ProjectReports";
 import { api, ApiError } from "../api";
 import { useI18n } from "../i18n";
-import {
-	Alert,
-	Avatar,
-	buttonClass,
-	Field,
-	Modal,
-	PageError,
-	PageLoading,
-	Segmented,
-	SelectField,
-	StatePanel,
-	TextareaField,
-} from "../ui";
+import { Alert, Avatar, buttonClass, Field, Modal, PageError, PageLoading, Segmented, SelectField, StatePanel, TextareaField, ConfirmModal, useToast } from "../ui";
 import {
 	PROJECT_CATEGORIES,
 	PROJECT_HEALTHS,
@@ -170,9 +158,15 @@ function MilestonesCard({ data }: { data: ProjectData }) {
 		mutationFn: (milestone: Milestone) => api(`${base}/${milestone.id}`, { method: "PATCH", body: { completed: !milestone.completedAt } }),
 		onSuccess: refresh,
 	});
+	const [removing, setRemoving] = useState<{ id: number; title: string } | null>(null);
+	const toast = useToast();
 	const remove = useMutation({
 		mutationFn: (id: number) => api(`${base}/${id}`, { method: "DELETE" }),
-		onSuccess: refresh,
+		onSuccess: async () => {
+			await refresh();
+			toast.success(t("pr.toast_milestone_removed", { name: removing?.title ?? "" }));
+			setRemoving(null);
+		},
 	});
 	const now = today();
 	const dates = data.milestones.map((milestone) => milestone.dueDate);
@@ -259,7 +253,7 @@ function MilestonesCard({ data }: { data: ProjectData }) {
 										type="button"
 										aria-label={t("cb.remove_file", { name: milestone.title })}
 										className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-muted"
-										onClick={() => remove.mutate(milestone.id)}
+										onClick={() => setRemoving(milestone)}
 									>
 										<Trash2 size={14} aria-hidden="true" />
 									</button>
@@ -269,6 +263,16 @@ function MilestonesCard({ data }: { data: ProjectData }) {
 					})}
 				</ul>
 			)}
+			<ConfirmModal
+				title={t("pr.milestone_delete_title")}
+				description={t("pr.milestone_delete_desc", { name: removing?.title ?? "" })}
+				confirmLabel={t("common.delete")}
+				open={!!removing}
+				pending={remove.isPending}
+				failed={remove.isError}
+				onConfirm={() => removing && remove.mutate(removing.id)}
+				onClose={() => setRemoving(null)}
+			/>
 		</section>
 	);
 }
@@ -732,7 +736,7 @@ function CompleteDialog({ data, onClose, onReports }: { data: ProjectData; onClo
 		<Modal title={t("pr.complete_title", { name: data.project.name })} description={t(step === 1 ? "pr.complete_desc" : "pr.complete_confirm_desc")} open onClose={onClose}>
 			{step === 1 ? (
 				<div className="flex flex-col gap-3">
-					{checks.isPending && <PageLoading />}
+					{checks.isPending && <PageLoading variant="inline" />}
 					{checks.isError && <Alert>{t("error.generic")}</Alert>}
 					<ul className="flex flex-col">
 						{checks.data?.map((check) => (
@@ -794,9 +798,15 @@ function CompleteDialog({ data, onClose, onReports }: { data: ProjectData; onClo
 	);
 }
 
+const TAB_VALUES: Tab[] = ["overview", "dashboard", "files", "reports", "team", "activity", "settings"];
+
 export function ProjectDetailPage({ id }: { id: string }) {
 	const { t, language } = useI18n();
-	const [tab, setTab] = useState<Tab>("overview");
+	// In the address, so a refresh or a shared link stays on the same tab.
+	const [, navigate] = useLocation();
+	const asked = new URLSearchParams(useSearch()).get("tab") as Tab | null;
+	const tab: Tab = asked && TAB_VALUES.includes(asked) ? asked : "overview";
+	const setTab = (next: Tab) => navigate(next === "overview" ? `/projects/${id}` : `/projects/${id}?tab=${next}`, { replace: true });
 	const [healthOpen, setHealthOpen] = useState(false);
 	const [completing, setCompleting] = useState(false);
 	const refresh = useRefresh(id);
@@ -806,7 +816,7 @@ export function ProjectDetailPage({ id }: { id: string }) {
 		queryFn: () => api<ProjectData>(`/projects/${id}`),
 		retry: false,
 	});
-	if (detail.isPending) return <PageLoading />;
+	if (detail.isPending) return <PageLoading variant="detail" />;
 	if (detail.isError) {
 		if (detail.error instanceof ApiError && detail.error.status === 404) {
 			return <StatePanel icon={SearchX} title={t("pr.not_found")} action={<Link href="/projects" className={buttonClass("outline")}>{t("pr.back")}</Link>} />;

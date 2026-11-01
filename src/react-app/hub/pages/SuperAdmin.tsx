@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { api, ApiError, authClient, type Me } from "../api";
@@ -152,8 +152,8 @@ function Layout({
 	}
 
 	return (
-		<div className="flex min-h-dvh flex-col bg-background md:flex-row">
-			<aside className="flex shrink-0 flex-col bg-[#101219] px-3 py-4 text-[#F3F4F7] md:sticky md:top-0 md:h-dvh md:w-[248px]">
+		<div className="flex min-h-dvh flex-col bg-background lg:flex-row">
+			<aside className="flex shrink-0 flex-col bg-[#101219] px-3 py-2.5 text-[#F3F4F7] lg:sticky lg:top-0 lg:h-dvh lg:w-[248px] lg:py-4">
 				<div className="flex items-center gap-2.5 px-1.5 py-1">
 					<img src={LOGO} alt="" width="30" height="30" className="rounded-md" />
 					<span className="leading-tight">
@@ -162,8 +162,12 @@ function Layout({
 							PLATFORM ADMIN
 						</span>
 					</span>
+					<span className="ml-auto flex items-center gap-3 text-xs font-medium lg:hidden">
+						{me.memberships.length > 0 && <Link href="/dashboard" className="text-[#F3F4F7] no-underline">My organization</Link>}
+						<button type="button" onClick={signOut} className="min-h-8 text-[#F3F4F7]">Sign out</button>
+					</span>
 				</div>
-				<nav aria-label="Platform" className="mt-4 flex flex-row flex-wrap gap-0.5 md:flex-col">
+				<nav aria-label="Platform" className="mt-1.5 flex gap-0.5 overflow-x-auto [scrollbar-width:none] lg:mt-4 lg:flex-col lg:overflow-visible">
 					{NAV.map((item) => {
 						const active = location === item.href;
 						return (
@@ -171,7 +175,8 @@ function Layout({
 								key={item.href}
 								href={item.href}
 								aria-current={active ? "page" : undefined}
-								className={`flex items-center gap-2 rounded-md px-2.5 py-2 no-underline ${
+								ref={active ? (link: HTMLAnchorElement | null) => link?.scrollIntoView({ block: "nearest", inline: "nearest" }) : undefined}
+								className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-2 no-underline ${
 									active
 										? "bg-[#4E81EF] font-semibold text-[#030711]"
 										: "text-[#F3F4F7] hover:bg-white/10"
@@ -187,7 +192,7 @@ function Layout({
 						);
 					})}
 				</nav>
-				<div className="mt-4 flex flex-col gap-2 border-t border-white/15 px-1.5 pt-2 text-xs text-[#A9B4C4] md:mt-auto">
+				<div className="mt-auto hidden flex-col gap-2 border-t border-white/15 px-1.5 pt-2 text-xs text-[#A9B4C4] lg:flex">
 					<p>Signed in as a superadmin. Changes here affect every organization.</p>
 					{me.memberships.length > 0 && (
 						<Link href="/dashboard" className="font-medium text-[#F3F4F7] no-underline hover:underline">
@@ -215,6 +220,23 @@ function Layout({
 				{children}
 			</main>
 		</div>
+	);
+}
+
+const PAGE_SIZE = 50;
+
+// Thousands of rows are heavy to draw and nobody reads them all. Searching still covers everything.
+function useShowMore<T>(rows: T[]) {
+	const [limit, setLimit] = useState(PAGE_SIZE);
+	return { shown: rows.slice(0, limit), more: rows.length - limit, showMore: () => setLimit((current) => current + PAGE_SIZE) };
+}
+
+function ShowMore({ more, onClick }: { more: number; onClick: () => void }) {
+	if (more <= 0) return null;
+	return (
+		<button type="button" onClick={onClick} className="w-full border-t border-border px-4 py-3 text-[13px] font-semibold text-selected-foreground hover:bg-muted">
+			Show more ({more} left)
+		</button>
 	);
 }
 
@@ -263,7 +285,7 @@ export function SuperOverviewPage({ me }: { me: Me }) {
 			title="Platform overview"
 			subtitle={new Date().toLocaleDateString("en-GB", { dateStyle: "full" })}
 		>
-			{overview.isPending && <PageLoading />}
+			{overview.isPending && <PageLoading variant="inline" />}
 			{overview.isError && <PageError onRetry={() => overview.refetch()} />}
 			{data && (
 				<>
@@ -373,8 +395,17 @@ function numberOrNull(value: string) {
 	return value.trim() === "" ? null : Number(value);
 }
 
-function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] }) {
+function OrganizationPanel({ org, plans, onClose }: { org: Organization; plans: Plan[]; onClose: () => void }) {
 	const queryClient = useQueryClient();
+	const edited = useRef(false);
+	const [kept, setKept] = useState(false);
+	useEffect(() => {
+		const onKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape" && !edited.current) onClose();
+		};
+		document.addEventListener("keydown", onKeyDown);
+		return () => document.removeEventListener("keydown", onKeyDown);
+	}, [onClose]);
 	const decide = useDecide();
 	const saved = {
 		planId: org.planId ? String(org.planId) : "",
@@ -438,13 +469,37 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 	}
 
 	return (
+		<>
+		{/* Clicking outside closes it, unless that would lose what someone typed. */}
+		<button
+			type="button"
+			aria-label="Close"
+			className="fixed inset-0 z-40 bg-black/30"
+			onClick={() => {
+				if (edited.current) setKept(true);
+				else onClose();
+			}}
+		/>
 		<aside
 			aria-label={`${org.name} details`}
-			className="min-w-0 flex-[1_1_320px] rounded-card border border-border bg-card xl:max-w-[400px]"
+			onInput={() => {
+				edited.current = true;
+			}}
+			onSubmit={() => {
+				edited.current = false;
+				setKept(false);
+			}}
+			className="fixed inset-y-0 right-0 z-50 w-[min(440px,100%)] overflow-y-auto border-l border-border bg-card shadow-[-12px_0_40px_rgba(3,7,17,0.1)]"
 		>
 			<div className="border-b border-border px-4 py-4">
+				{kept && (
+					<div className="mb-3">
+						<Alert tone="warning">You've changed something, so this stayed open. Save it, or use Close to discard it.</Alert>
+					</div>
+				)}
 				<div className="flex flex-wrap items-center gap-2">
-					<h2 className="min-w-0 break-words text-base font-semibold">{org.name}</h2>
+					<h2 className="min-w-0 flex-1 break-words text-base font-semibold">{org.name}</h2>
+					<button type="button" onClick={onClose} className={buttonClass("outline", BUTTON_SMALL)}>Close</button>
 					<StatusChip status={org.status} />
 				</div>
 				<dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
@@ -657,6 +712,7 @@ function OrganizationPanel({ org, plans }: { org: Organization; plans: Plan[] })
 				</div>
 			</Modal>
 		</aside>
+		</>
 	);
 }
 
@@ -688,6 +744,8 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 	);
 	const selected = list.find((org) => org.id === selectedId) ?? null;
 	const waiting = list.filter((org) => org.request).length;
+	const page = useShowMore(visible);
+	const closePanel = useCallback(() => setSelectedId(null), []);
 
 	return (
 		<Layout
@@ -695,7 +753,7 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 			title="Organizations"
 			subtitle={`${plural(list.length, "organization")} · ${plural(waiting, "upgrade request")} waiting`}
 		>
-			{organizations.isPending && <PageLoading />}
+			{organizations.isPending && <PageLoading variant="inline" />}
 			{organizations.isError && <PageError onRetry={() => organizations.refetch()} />}
 			{organizations.data && (
 				<>
@@ -723,9 +781,9 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 							Upgrade requests only
 						</label>
 					</div>
-					<div className="flex flex-wrap items-start gap-4">
-						<section className="min-w-0 flex-[999_1_520px] overflow-x-auto rounded-card border border-border bg-card">
-							<table className="w-full min-w-[640px] text-left text-[13px]">
+					<div>
+						<section className="min-w-0 overflow-x-auto rounded-card border border-border bg-card">
+							<table className="stack-table w-full text-left text-[13px] md:min-w-[640px]">
 								<thead className="bg-background text-xs text-muted-foreground">
 									<tr>
 										<th scope="col" className="px-4 py-2.5 font-semibold">Organization</th>
@@ -737,15 +795,16 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 									</tr>
 								</thead>
 								<tbody>
-									{visible.map((org) => (
+									{page.shown.map((org) => (
 										<tr
 											key={org.id}
-											className={`border-t border-border ${org.id === selectedId ? "bg-selected" : ""}`}
+											onClick={() => setSelectedId(org.id)}
+											className={`cursor-pointer border-t border-border hover:bg-muted ${org.id === selectedId ? "bg-selected" : ""}`}
 										>
 											<td className="px-4 py-2.5">
 												<button
 													type="button"
-													className="text-left font-semibold hover:underline"
+													className="min-h-8 text-left font-semibold hover:underline"
 													onClick={() => setSelectedId(org.id)}
 												>
 													{org.name}
@@ -762,12 +821,12 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 													</span>
 												)}
 											</td>
-											<td className="px-2 py-2.5">
+											<td data-label="Plan" className="px-2 py-2.5">
 												{org.planName ? `${org.planName} · ${org.billingCycle}` : "—"}
 											</td>
-											<td className="px-2 py-2.5">{org.activeMembers}</td>
-											<td className="px-2 py-2.5">{formatBytes(org.storageUsed)}</td>
-											<td className="px-2 py-2.5">{formatDate(org.createdAt)}</td>
+											<td data-label="Users" className="px-2 py-2.5">{org.activeMembers}</td>
+											<td data-label="Storage" className="px-2 py-2.5">{formatBytes(org.storageUsed)}</td>
+											<td data-label="Created" className="px-2 py-2.5">{formatDate(org.createdAt)}</td>
 										</tr>
 									))}
 								</tbody>
@@ -775,9 +834,10 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 							{visible.length === 0 && (
 								<p className="p-4 text-center text-muted-foreground">No organizations match.</p>
 							)}
+							<ShowMore more={page.more} onClick={page.showMore} />
 						</section>
 						{selected && plans.data && (
-							<OrganizationPanel key={selected.id} org={selected} plans={plans.data} />
+							<OrganizationPanel key={selected.id} org={selected} plans={plans.data} onClose={closePanel} />
 						)}
 					</div>
 				</>
@@ -840,6 +900,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 			setChanging(null);
 		},
 	});
+	const page = useShowMore(users.data?.users ?? []);
 	return (
 		<Layout me={me} title="Users" subtitle="Everyone who has signed up, across all organizations">
 			{users.isError && <PageError onRetry={() => users.refetch()} />}
@@ -852,10 +913,10 @@ export function SuperUsersPage({ me }: { me: Me }) {
 				</dl>
 			)}
 			<SearchField label={"Search by name or email…"} value={search} onChange={setSearch} />
-			{users.isPending && <PageLoading />}
+			{users.isPending && <PageLoading variant="inline" />}
 			{users.data && (
 				<section className="overflow-x-auto rounded-card border border-border bg-card">
-					<table className="w-full min-w-[720px] text-left text-[13px]">
+					<table className="stack-table w-full text-left text-[13px] md:min-w-[720px]">
 						<thead className="bg-background text-xs text-muted-foreground">
 							<tr>
 								<th scope="col" className="px-4 py-2.5 font-semibold">User</th>
@@ -867,7 +928,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 							</tr>
 						</thead>
 						<tbody>
-							{users.data.users.map((person) => (
+							{page.shown.map((person) => (
 								<tr key={person.id} className={`border-t border-border ${person.isActive ? "" : "bg-background"}`}>
 									<td className="px-4 py-2.5">
 										<span className="block break-words font-semibold">{person.name}</span>
@@ -888,8 +949,8 @@ export function SuperUsersPage({ me }: { me: Me }) {
 											</span>
 										))}
 									</td>
-									<td className="px-2 py-2.5">{formatDate(person.createdAt)}</td>
-									<td className="px-2 py-2.5">{formatDate(person.lastActive)}</td>
+									<td data-label="Signed up" className="px-2 py-2.5">{formatDate(person.createdAt)}</td>
+									<td data-label="Last active" className="px-2 py-2.5">{formatDate(person.lastActive)}</td>
 									<td className="px-2 py-2.5">
 										{person.isActive ? "Active" : "Deactivated"}
 										{person.twoFactorEnabled && (
@@ -905,7 +966,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 											</button>
 										)}
 									</td>
-									<td className="px-4 py-2.5 text-right">
+									<td className="px-4 py-2.5 text-right max-md:text-left">
 										{person.isSuperAdmin || person.id === me.user.id ? (
 											<span className="text-xs text-muted-foreground">Protected</span>
 										) : (
@@ -928,6 +989,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 							))}
 						</tbody>
 					</table>
+					<ShowMore more={page.more} onClick={page.showMore} />
 				</section>
 			)}
 			<Modal
@@ -1170,7 +1232,7 @@ export function SuperPlansPage({ me }: { me: Me }) {
 				</button>
 			}
 		>
-			{plans.isPending && <PageLoading />}
+			{plans.isPending && <PageLoading variant="inline" />}
 			{plans.isError && <PageError onRetry={() => plans.refetch()} />}
 			<ul className="flex flex-col gap-3">
 				{plans.data?.map((plan) => (
@@ -1414,7 +1476,7 @@ export function SuperModulesPage({ me }: { me: Me }) {
 				</button>
 			}
 		>
-			{overview.isPending && <PageLoading />}
+			{overview.isPending && <PageLoading variant="inline" />}
 			{overview.isError && <PageError onRetry={() => overview.refetch()} />}
 			{data && (
 				<div className="flex flex-col gap-4">
@@ -1465,11 +1527,11 @@ export function SuperModulesPage({ me }: { me: Me }) {
 					</div>
 
 					<div className="flex flex-wrap items-start gap-4">
-						<section className="min-w-0 flex-[3_1_520px] overflow-hidden rounded-card border border-border bg-card">
+						<section className="min-w-0 max-w-full flex-[3_1_460px] overflow-hidden rounded-card border border-border bg-card">
 							<h2 className="px-4 py-3 text-[15px] font-semibold">What each plan includes</h2>
 							<DataTable
 								bare
-								minWidth={560}
+								minWidth={460}
 								head={["Module", "Trial", ...data.plans.map((plan) => plan.name)]}
 							>
 								<tr>
@@ -1587,7 +1649,7 @@ export function SuperModulesPage({ me }: { me: Me }) {
 						) : (
 							<DataTable
 								bare
-								minWidth={720}
+								stacked
 								head={["Organization", "Module", "State", "Note", <span key="actions" className="sr-only">Actions</span>]}
 							>
 								{data.overrides.map((grant) => (
@@ -1685,9 +1747,10 @@ export function SuperStoragePage({ me }: { me: Me }) {
 	const total = list.reduce((sum, org) => sum + org.storageUsed, 0);
 	const files = list.reduce((sum, org) => sum + org.fileCount, 0);
 	const nearLimit = list.filter((org) => percentOf(org) >= 90).length;
+	const page = useShowMore(list);
 	return (
 		<Layout me={me} title="Storage" subtitle="File storage by organization, against each limit">
-			{organizations.isPending && <PageLoading />}
+			{organizations.isPending && <PageLoading variant="inline" />}
 			{organizations.isError && <PageError onRetry={() => organizations.refetch()} />}
 			{organizations.data && (
 				<>
@@ -1697,7 +1760,7 @@ export function SuperStoragePage({ me }: { me: Me }) {
 						<StatCard label="Organizations" value={list.length} />
 					</dl>
 					<section className="overflow-x-auto rounded-card border border-border bg-card">
-						<table className="w-full min-w-[560px] text-left text-[13px]">
+						<table className="stack-table w-full text-left text-[13px] md:min-w-[560px]">
 							<thead className="bg-background text-xs text-muted-foreground">
 								<tr>
 									<th scope="col" className="px-4 py-2.5 font-semibold">Organization</th>
@@ -1707,12 +1770,12 @@ export function SuperStoragePage({ me }: { me: Me }) {
 								</tr>
 							</thead>
 							<tbody>
-								{list.map((org) => {
+								{page.shown.map((org) => {
 									const percent = Math.min(100, Math.round(percentOf(org)));
 									return (
 										<tr key={org.id} className="border-t border-border">
 											<td className="break-words px-4 py-2.5 font-medium">{org.name}</td>
-											<td className="px-2 py-2.5">{org.planName ?? "Trial"}</td>
+											<td data-label="Plan" className="px-2 py-2.5">{org.planName ?? "Trial"}</td>
 											<td className="px-2 py-2.5">
 												<span className="block">
 													{formatBytes(org.storageUsed)}
@@ -1729,12 +1792,13 @@ export function SuperStoragePage({ me }: { me: Me }) {
 													</span>
 												)}
 											</td>
-											<td className="px-4 py-2.5">{org.fileCount}</td>
+											<td data-label="Files" className="px-4 py-2.5">{org.fileCount}</td>
 										</tr>
 									);
 								})}
 							</tbody>
 						</table>
+						<ShowMore more={page.more} onClick={page.showMore} />
 					</section>
 				</>
 			)}

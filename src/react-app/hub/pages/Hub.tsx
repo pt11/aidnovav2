@@ -291,7 +291,7 @@ export function HubPage({ org }: { org: Membership }) {
 
 			<section className="w-full">
 				{failed && <Alert>{t("error.load")}</Alert>}
-				{loading && <PageLoading />}
+				{loading && <PageLoading variant="inline" />}
 				{!loading && !failed && total === 0 && (
 					<StatePanel
 						icon={FolderOpen}

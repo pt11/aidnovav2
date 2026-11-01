@@ -55,7 +55,7 @@ async function findReport(db: Db, projectId: number, rawId: string | undefined) 
 
 // Whoever wrote or last submitted a report doesn't approve it, so a lead can't sign
 // off their own revision of someone else's report. It goes to another lead or an admin.
-function canReview(project: Project, report: Report, userId: string, role: string) {
+export function canReview(project: Project, report: Report, userId: string, role: string) {
 	return report.createdBy !== userId && report.submittedBy !== userId && (role === "admin" || isLead(project, userId));
 }
 

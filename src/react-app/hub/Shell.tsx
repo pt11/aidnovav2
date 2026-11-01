@@ -36,7 +36,7 @@ import { api, authClient, type Me, type Membership, type Role } from "./api";
 import { useI18n } from "./i18n";
 import { AskPanel } from "./AskPanel";
 import { useCapacityMe } from "./pages/Capacity";
-import { Avatar, LanguageSwitch } from "./ui";
+import { Avatar, LanguageSwitch, PageBanner } from "./ui";
 
 interface NavItem {
 	url: string;
@@ -338,7 +338,7 @@ function CapacitySubNav({ onNavigate }: { onNavigate?: () => void }) {
 	const items = [
 		{ url: "/capacity", label: t("cb.my_training"), active: location === "/capacity" || /^\/capacity\/records\//.test(location), count: 0 },
 		{ url: "/capacity/report", label: t("cb.submit_training"), active: location === "/capacity/report", count: 0 },
-		{ url: "/capacity/skills", label: t("cb.skills_title"), active: location === "/capacity/skills", count: 0 },
+		{ url: "/capacity/skills", label: t("cb.skills_title"), active: location === "/capacity/skills", count: me.data?.assessCount ?? 0 },
 		...(me.data?.reportScopes.length
 			? [{ url: "/capacity/team", label: t("cb.team_title"), active: location === "/capacity/team", count: 0 }]
 			: []),
@@ -710,6 +710,49 @@ export function Header({
 	);
 }
 
+// Only real, workspace-wide things go here, and only one at a time: the most serious wins.
+function WorkspaceBanner({ org }: { org?: Membership }) {
+	const { t } = useI18n();
+	const [online, setOnline] = useState(() => navigator.onLine);
+	const [now] = useState(() => Date.now());
+	const [dismissed, setDismissed] = useState(() => {
+		try {
+			return sessionStorage.getItem("aidnova_trial_banner") === "hidden";
+		} catch {
+			return false;
+		}
+	});
+	useEffect(() => {
+		const update = () => setOnline(navigator.onLine);
+		window.addEventListener("online", update);
+		window.addEventListener("offline", update);
+		return () => {
+			window.removeEventListener("online", update);
+			window.removeEventListener("offline", update);
+		};
+	}, []);
+	if (!online) return <PageBanner tone="error">{t("banner.offline")}</PageBanner>;
+	if (!org || org.subscriptionStatus !== "trial" || !org.trialEndDate || !canManage(org.role) || dismissed) return null;
+	const days = Math.ceil((new Date(org.trialEndDate).getTime() - now) / 86400000);
+	if (days > 3 || days < 0) return null;
+	return (
+		<PageBanner
+			tone="warning"
+			action={<Link href="/settings/plan">{t("shell.request_upgrade")}</Link>}
+			onDismiss={() => {
+				setDismissed(true);
+				try {
+					sessionStorage.setItem("aidnova_trial_banner", "hidden");
+				} catch {
+					// It just comes back next time.
+				}
+			}}
+		>
+			{t(days === 0 ? "banner.trial_today" : "banner.trial_days", { days })}
+		</PageBanner>
+	);
+}
+
 function MobileBottomNav({ role, activeModules }: { role: Role; activeModules: string[] }) {
 	const { t } = useI18n();
 	const [location] = useLocation();
@@ -921,6 +964,7 @@ export function WorkspaceShell({
 			)}
 
 			<div className={`flex min-w-0 flex-1 flex-col ${askOpen && askExpanded ? "xl:hidden" : ""}`}>
+				{!isFocused && <WorkspaceBanner org={org} />}
 				{!isFocused && (
 					<Header
 						onOpenMenu={() => setDrawerOpen(true)}

@@ -1,0 +1,1 @@
+ALTER TABLE `capacity_skills` ADD `created_by` text REFERENCES user(id);

@@ -1319,6 +1319,8 @@ export const capacitySkills = sqliteTable(
 		rubric: text("rubric").notNull(),
 		rubricVersion: integer("rubric_version").notNull().default(1),
 		retired: integer("retired", { mode: "boolean" }).notNull().default(false),
+		// Set when a staff member added it while nominating, rather than an admin.
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
 		createdAt: createdAt(),
 	},
 	(table) => [index("capacity_skills_org_idx").on(table.organizationId)],

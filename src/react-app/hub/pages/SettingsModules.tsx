@@ -307,7 +307,7 @@ export function SettingsModulesPage({ org }: { org: Membership }) {
 			title={t("modules.title")}
 			subtitle={t("modules.desc", { org: org.name })}
 		>
-			{modules.isPending && <PageLoading />}
+			{modules.isPending && <PageLoading variant="inline" />}
 			{modules.isError && <PageError onRetry={() => modules.refetch()} />}
 			{data && (
 				<>

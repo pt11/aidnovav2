@@ -256,12 +256,12 @@ function megaModules(lang: Lang, anchorBase: string): MegaModule[] {
 			icon: "rays",
 			tone: "#f59f0a",
 			title: NAV_COPY.ai,
-			text: "Ask AidNova and Project Intelligence — answers that show their sources.",
+			text: "Ask AidNova answers from your organization’s content and shows its sources.",
 			early: false,
 			href: "/ai",
 			links: [
 				{ label: "Ask AidNova", href: "/ai" },
-				{ label: "Project Intelligence", href: "/ai" },
+				{ label: "Project Intelligence · Coming soon", href: "/ai#project-intelligence" },
 			],
 		},
 	];

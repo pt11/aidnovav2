@@ -20,7 +20,7 @@ import { MyTrainingPage, ReportTrainingPage, TrainingDetailPage } from "./pages/
 import { CapacityReviewsPage, CapacitySettingsPage } from "./pages/CapacityReview";
 import { CapacitySkillsPage, CapacityTeamPage } from "./pages/CapacitySkills";
 import { CapacityTrainingReportPage } from "./pages/CapacityTrainingReport";
-import { DirectoryPage, DirectoryPrivacyPage } from "./pages/Directory";
+import { DirectoryPage, DirectoryPrivacyPage, DirectoryRulesPage } from "./pages/Directory";
 import { CreateOrganizationPage } from "./pages/CreateOrganization";
 import { DashboardPage } from "./pages/Dashboard";
 import { FilesPage } from "./pages/Files";
@@ -64,7 +64,7 @@ import { CalendarPage } from "./pages/Calendar";
 import { SettingsModulesPage } from "./pages/SettingsModules";
 import { UserProfilePage } from "./pages/UserProfile";
 import { canManage, WorkspaceShell } from "./Shell";
-import { buttonClass, StartupScreen, StatePanel } from "./ui";
+import { buttonClass, StartupScreen, StatePanel , ToastProvider } from "./ui";
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -311,6 +311,9 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 				<Route path="/capacity/team">
 					{capacityOn && manager ? <CapacityTeamPage /> : <NoAccessPage />}
 				</Route>
+				<Route path="/directory/rules">
+					{directoryOn && org.role === "admin" ? <DirectoryRulesPage /> : <NoAccessPage />}
+				</Route>
 				<Route path="/directory/privacy">
 					{directoryOn ? <DirectoryPrivacyPage /> : <NoAccessPage />}
 				</Route>
@@ -479,7 +482,9 @@ export default function HubApp() {
 		<ErrorBoundary>
 			<QueryClientProvider client={queryClient}>
 				<I18nProvider>
-					<Gate />
+					<ToastProvider>
+						<Gate />
+					</ToastProvider>
 				</I18nProvider>
 			</QueryClientProvider>
 		</ErrorBoundary>

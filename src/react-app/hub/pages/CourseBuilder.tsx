@@ -620,7 +620,7 @@ function HubPicker({
 			<div className="flex flex-col gap-3">
 				{add.isError && <Alert>{t("error.generic")}</Alert>}
 				<SearchField label={t("course.hub_search")} value={search} onChange={setSearch} />
-				{files.isPending && <PageLoading />}
+				{files.isPending && <PageLoading variant="inline" />}
 				{files.isError && <PageError onRetry={() => files.refetch()} />}
 				{files.data && visible.length === 0 && (
 					<p className="py-5 text-center text-muted-foreground">{t("course.hub_none")}</p>

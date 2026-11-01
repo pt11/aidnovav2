@@ -22,7 +22,6 @@ const SHOT_SIZES: Record<string, [number, number]> = {
 	"project-data": [1280, 720],
 	"project-portfolio": [1280, 700],
 	"project-team": [1280, 620],
-	"project-ai": [1280, 780],
 	"cb-training": [1440, 860],
 	"cb-review": [1180, 760],
 	"cb-skills": [1180, 720],

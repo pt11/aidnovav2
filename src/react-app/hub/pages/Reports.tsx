@@ -199,7 +199,7 @@ export function ActivityDialog({
 			onClose={onClose}
 		>
 			<div className="flex flex-col gap-3">
-				{activity.isPending && <PageLoading />}
+				{activity.isPending && <PageLoading variant="inline" />}
 				{activity.isError &&
 					(activity.error instanceof ApiError && activity.error.code === "ACTIVITY_ADMINS_ONLY" ? (
 						<p role="status" className="rounded-md bg-background px-3 py-2.5 text-[13px]">
@@ -509,7 +509,7 @@ export function ReportsPage() {
 				/>
 			</div>
 
-			{active.isPending && <PageLoading />}
+			{active.isPending && <PageLoading variant="inline" />}
 			{active.isError && <PageError onRetry={() => active.refetch()} />}
 
 			{tab === "overview" && overview.data && (

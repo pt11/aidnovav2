@@ -12,8 +12,7 @@ import {
 	PageLoading,
 	SelectField,
 	StatePanel,
-	TextareaField,
-} from "../ui";
+	TextareaField, useToast } from "../ui";
 import { uploadProjectFile, useProjectFiles } from "./ProjectFiles";
 import { shortDay } from "./Projects";
 
@@ -261,10 +260,12 @@ function ReviewBox({ projectId, report, onDone }: { projectId: number; report: P
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
 	const [comment, setComment] = useState("");
+	const toast = useToast();
 	const decide = useMutation({
 		mutationFn: (decision: "approve" | "revise") => api(`/projects/${projectId}/reports/${report.id}/decision`, { method: "POST", body: { decision, comment } }),
-		onSuccess: async () => {
+		onSuccess: async (_, decision) => {
 			await queryClient.invalidateQueries({ queryKey: projectReportsKey(projectId) });
+			toast.success(t(decision === "approve" ? "pr.toast_approved" : "pr.toast_returned"));
 			onDone();
 		},
 	});
@@ -372,7 +373,7 @@ export function ProjectReportsTab({ projectId }: { projectId: number }) {
 			await refresh();
 		},
 	});
-	if (data.isPending) return <PageLoading />;
+	if (data.isPending) return <PageLoading variant="inline" />;
 	if (data.isError) return <PageError onRetry={() => data.refetch()} />;
 	const { reports, schedule, canContribute, canManage, frequency, currency } = data.data;
 	const missing = schedule.filter((item) => item.reportId === null);

@@ -1,5 +1,5 @@
-import { useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { Check, CircleAlert, Download, MoreHorizontal, Search, X, type LucideIcon } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
+import { Archive, Check, CircleAlert, CircleCheck, Download, Info, MoreHorizontal, Search, Sparkles, TriangleAlert, X, type LucideIcon } from "lucide-react";
 import { useLocation } from "wouter";
 import { useI18n } from "./i18n";
 
@@ -143,8 +143,9 @@ export function Field({
 			{(error || hint) && (
 				<p
 					id={hintId}
-					className={`text-xs leading-5 ${error ? "text-danger-foreground" : "text-muted-foreground"}`}
+					className={`flex items-start gap-1.5 text-xs leading-5 ${error ? "text-danger-foreground" : "text-muted-foreground"}`}
 				>
+					{error && <CircleAlert size={13} aria-hidden="true" className="mt-[3px] shrink-0" />}
 					{error || hint}
 				</p>
 			)}
@@ -312,12 +313,90 @@ export function PageHeader({
 	);
 }
 
-export function PageLoading() {
-	const { t } = useI18n();
+export function Skeleton({ className = "" }: { className?: string }) {
+	return <span aria-hidden="true" className={`skeleton block rounded-md ${className}`} />;
+}
+
+function SkeletonTiles({ count = 4 }: { count?: number }) {
 	return (
-		<p role="status" className="p-6 text-sm text-muted-foreground">
-			{t("common.loading")}
-		</p>
+		<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+			{Array.from({ length: count }, (_, index) => (
+				<div key={index} className="flex flex-col gap-2.5 rounded-card border border-border bg-card p-4">
+					<Skeleton className="h-3.5 w-1/2" />
+					<Skeleton className="h-7 w-1/3" />
+					<Skeleton className="h-3 w-3/4" />
+				</div>
+			))}
+		</div>
+	);
+}
+
+function SkeletonRows({ count = 5 }: { count?: number }) {
+	return (
+		<div className="rounded-card border border-border bg-card">
+			{Array.from({ length: count }, (_, index) => (
+				<div key={index} className="flex items-center gap-3 border-t border-border px-4 py-3.5 first:border-t-0">
+					<Skeleton className="size-8 shrink-0 rounded-full" />
+					<div className="flex min-w-0 flex-1 flex-col gap-2">
+						<Skeleton className="h-3.5 w-2/5" />
+						<Skeleton className="h-3 w-3/5" />
+					</div>
+					<Skeleton className="h-6 w-16 shrink-0 max-sm:hidden" />
+				</div>
+			))}
+		</div>
+	);
+}
+
+function SkeletonCards({ count = 6 }: { count?: number }) {
+	return (
+		<div className="grid grid-cols-[repeat(auto-fill,minmax(min(280px,100%),1fr))] gap-3">
+			{Array.from({ length: count }, (_, index) => (
+				<div key={index} className="flex flex-col gap-3 rounded-card border border-border bg-card p-4">
+					<Skeleton className="h-4 w-3/5" />
+					<Skeleton className="h-3 w-2/5" />
+					<Skeleton className="h-2 w-full rounded-full" />
+					<Skeleton className="h-3 w-4/5" />
+				</div>
+			))}
+		</div>
+	);
+}
+
+// Shaped like the page on its way, so nothing jumps when it arrives. "inline" is
+// for a section inside a page that already has its own heading.
+export function PageLoading({ variant = "table" }: { variant?: "table" | "cards" | "detail" | "dashboard" | "inline" }) {
+	const { t } = useI18n();
+	const body =
+		variant === "cards" ? (
+			<SkeletonCards />
+		) : variant === "dashboard" ? (
+			<>
+				<SkeletonTiles />
+				<div className="grid items-start gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+					<SkeletonRows count={4} />
+					<SkeletonRows count={3} />
+				</div>
+			</>
+		) : variant === "detail" ? (
+			<>
+				<SkeletonTiles />
+				<SkeletonRows count={4} />
+			</>
+		) : (
+			<SkeletonRows count={variant === "inline" ? 3 : 6} />
+		);
+	return (
+		<div role="status" className={`flex flex-col gap-4 ${variant === "inline" ? "" : "p-4 md:px-6 md:py-7"}`}>
+			<span className="sr-only">{t("common.loading")}</span>
+			{variant !== "inline" && (
+				<div className="flex flex-col gap-2.5">
+					<Skeleton className="h-7 w-52 max-w-full" />
+					<Skeleton className="h-3.5 w-80 max-w-full" />
+				</div>
+			)}
+			{body}
+		</div>
 	);
 }
 
@@ -409,6 +488,7 @@ export function Modal({
 	description,
 	open,
 	wide = false,
+	locked = false,
 	onClose,
 	children,
 }: {
@@ -416,11 +496,17 @@ export function Modal({
 	description?: string;
 	open: boolean;
 	wide?: boolean;
+	locked?: boolean;
 	onClose: () => void;
 	children: ReactNode;
 }) {
+	const { t } = useI18n();
 	const ref = useRef<HTMLDialogElement>(null);
 	const id = useId();
+	// Clicking outside or pressing Esc closes it, unless that would lose what someone typed.
+	const edited = useRef(false);
+	const pressedOutside = useRef(false);
+	const [kept, setKept] = useState(false);
 
 	useEffect(() => {
 		const dialog = ref.current;
@@ -429,11 +515,44 @@ export function Modal({
 		if (!open && dialog.open) dialog.close();
 	}, [open]);
 
+	const isOutside = (event: MouseEvent<HTMLDialogElement>) => {
+		const box = event.currentTarget.getBoundingClientRect();
+		return event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom;
+	};
+	const keepOpen = () => {
+		setKept(true);
+		ref.current?.scrollTo({ top: 0 });
+	};
+
 	return (
 		<dialog
 			ref={ref}
 			aria-labelledby={id}
-			onClose={onClose}
+			onClose={() => {
+				edited.current = false;
+				pressedOutside.current = false;
+				setKept(false);
+				onClose();
+			}}
+			onCancel={(event) => {
+				if (edited.current || locked) {
+					event.preventDefault();
+					if (edited.current) keepOpen();
+				}
+			}}
+			onInput={() => {
+				edited.current = true;
+				setKept(false);
+			}}
+			// Only a press that began outside counts, so dragging to select text doesn't close it.
+			onMouseDown={(event) => {
+				pressedOutside.current = event.target === event.currentTarget && isOutside(event);
+			}}
+			onClick={(event) => {
+				if (event.target !== event.currentTarget || !isOutside(event) || !pressedOutside.current || locked) return;
+				if (edited.current) keepOpen();
+				else event.currentTarget.close();
+			}}
 			className={`m-auto max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto rounded-card border border-border bg-card p-6 text-foreground shadow-lg backdrop:bg-black/50 ${wide ? "max-w-3xl" : "max-w-lg"}`}
 		>
 			{open && (
@@ -443,6 +562,11 @@ export function Modal({
 					</h2>
 					{description && (
 						<p className="mt-1 text-sm text-muted-foreground">{description}</p>
+					)}
+					{kept && (
+						<div className="mt-3">
+							<Alert tone="warning">{t("common.kept_open")}</Alert>
+						</div>
 					)}
 					<div className="mt-4">{children}</div>
 				</>
@@ -474,7 +598,7 @@ export function ConfirmModal({
 }) {
 	const { t } = useI18n();
 	return (
-		<Modal title={title} description={description} open={open} onClose={onClose}>
+		<Modal title={title} description={description} open={open} locked={pending} onClose={onClose}>
 			{failed && (
 				<div className="mb-4">
 					<Alert>{failedMessage ?? t("error.generic")}</Alert>
@@ -497,14 +621,160 @@ export function ConfirmModal({
 	);
 }
 
-export function Alert({ children }: { children: ReactNode }) {
+export type AlertTone = "info" | "success" | "warning" | "error" | "neutral" | "ai";
+
+const TONE_ICONS: Record<AlertTone, LucideIcon> = {
+	info: Info,
+	success: CircleCheck,
+	warning: TriangleAlert,
+	error: CircleAlert,
+	neutral: Archive,
+	ai: Sparkles,
+};
+
+function DismissButton({ onClick, className = "" }: { onClick: () => void; className?: string }) {
+	const { t } = useI18n();
 	return (
-		<p
-			role="alert"
-			className="rounded-md bg-danger-surface px-3 py-2 text-sm text-danger-foreground"
+		<button type="button" aria-label={t("common.dismiss")} onClick={onClick} className={`grid size-7 shrink-0 place-items-center rounded-md hover:bg-black/5 dark:hover:bg-white/10 ${className}`}>
+			<X size={15} aria-hidden="true" />
+		</button>
+	);
+}
+
+// With no title, the message itself is the title. Errors interrupt screen readers; the rest wait.
+export function Alert({
+	children,
+	tone = "error",
+	title,
+	actions,
+	onDismiss,
+}: {
+	children?: ReactNode;
+	tone?: AlertTone;
+	title?: ReactNode;
+	actions?: ReactNode;
+	onDismiss?: () => void;
+}) {
+	const Icon = TONE_ICONS[tone];
+	return (
+		<div
+			role={tone === "error" ? "alert" : "status"}
+			className={`tone-${tone} flex items-start gap-3 rounded-[10px] border border-[var(--tone-border)] bg-[var(--tone-bg)] py-3.5 pr-3.5 pl-4`}
 		>
+			<Icon size={18} aria-hidden="true" className="mt-px shrink-0 text-[var(--tone-icon)]" />
+			<div className="min-w-0 flex-1 break-words">
+				<div className="text-sm leading-5 font-semibold text-[var(--tone-title)]">{title ?? children}</div>
+				{title && children && <div className="mt-0.5 text-sm leading-[21px] text-[var(--alert-body)]">{children}</div>}
+				{actions && <div className="mt-3 flex flex-wrap gap-2">{actions}</div>}
+			</div>
+			{onDismiss && <DismissButton onClick={onDismiss} className="text-muted-foreground" />}
+		</div>
+	);
+}
+
+// Quiet, for inside a card.
+export function AccentNote({ tone = "info", label, children }: { tone?: AlertTone; label?: string; children: ReactNode }) {
+	const Icon = TONE_ICONS[tone];
+	return (
+		<div role="status" className={`tone-${tone} flex items-start gap-3 rounded-lg border border-l-4 border-border border-l-[var(--tone-icon)] bg-card px-3.5 py-3 text-sm leading-5`}>
+			<Icon size={16} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--tone-icon)]" />
+			<span className="min-w-0 break-words">
+				{label && <b>{label} </b>}
+				<span className="text-muted-foreground">{children}</span>
+			</span>
+		</div>
+	);
+}
+
+// Small, next to the thing it's about.
+export function StatusTag({ tone = "info", children }: { tone?: AlertTone; children: ReactNode }) {
+	const Icon = TONE_ICONS[tone];
+	return (
+		<span role="status" className={`tone-${tone} inline-flex items-center gap-2 rounded-md bg-[var(--tone-bg)] px-2.5 py-1.5 text-[13px] leading-[18px] text-[var(--tone-title)]`}>
+			<Icon size={14} aria-hidden="true" className="shrink-0" />
 			{children}
-		</p>
+		</span>
+	);
+}
+
+// Full width at the top of the app, for things that affect the whole workspace.
+export function PageBanner({ tone = "info", action, onDismiss, children }: { tone?: AlertTone; action?: ReactNode; onDismiss?: () => void; children: ReactNode }) {
+	const Icon = TONE_ICONS[tone];
+	return (
+		<div
+			role={tone === "error" ? "alert" : "status"}
+			className={`tone-${tone} flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--tone-border)] bg-[var(--tone-solid)] px-4 py-2.5 text-sm text-[var(--tone-solid-text)] md:px-5`}
+		>
+			<Icon size={17} aria-hidden="true" className="shrink-0" />
+			<span className="min-w-0 flex-1 basis-52 break-words">{children}</span>
+			{action && <span className="font-semibold underline underline-offset-2 [&_a]:text-inherit">{action}</span>}
+			{onDismiss && <DismissButton onClick={onDismiss} />}
+		</div>
+	);
+}
+
+interface ToastMessage {
+	id: number;
+	tone: "success" | "info" | "error";
+	title: string;
+	description?: string;
+}
+
+type ShowToast = (toast: Omit<ToastMessage, "id">) => void;
+const ToastContext = createContext<ShowToast>(() => {});
+const MAX_TOASTS = 3;
+
+// For the result of something the person just did. Anything they have to act on
+// later belongs in an inline alert instead.
+export function useToast() {
+	const show = useContext(ToastContext);
+	return useMemo(
+		() => ({
+			success: (title: string, description?: string) => show({ tone: "success", title, description }),
+			info: (title: string, description?: string) => show({ tone: "info", title, description }),
+			error: (title: string, description?: string) => show({ tone: "error", title, description }),
+		}),
+		[show],
+	);
+}
+
+function Toast({ toast, onDismiss }: { toast: ToastMessage; onDismiss: () => void }) {
+	const Icon = TONE_ICONS[toast.tone];
+	return (
+		<div
+			role={toast.tone === "error" ? "alert" : "status"}
+			className={`toast tone-${toast.tone} pointer-events-auto relative flex w-full items-start gap-3 overflow-hidden rounded-xl border border-border bg-card p-3.5 shadow-[0_16px_40px_rgba(3,7,17,0.14)]`}
+		>
+			<Icon size={18} aria-hidden="true" className="mt-px shrink-0 text-[var(--tone-icon)]" />
+			<div className="min-w-0 flex-1 break-words">
+				<b className="block text-sm leading-5">{toast.title}</b>
+				{toast.description && <span className="block text-[13px] leading-[19px] text-muted-foreground">{toast.description}</span>}
+			</div>
+			<DismissButton onClick={onDismiss} className="text-muted-foreground" />
+			{/* Errors stay until dismissed. The rest close when this runs out, and hovering pauses it. */}
+			{toast.tone !== "error" && (
+				<span aria-hidden="true" onAnimationEnd={onDismiss} className="toast-timer absolute bottom-0 left-0 h-[3px] w-full bg-[var(--tone-icon)]" />
+			)}
+		</div>
+	);
+}
+
+export function ToastProvider({ children }: { children: ReactNode }) {
+	const [toasts, setToasts] = useState<ToastMessage[]>([]);
+	const nextId = useRef(1);
+	const show = useCallback<ShowToast>((toast) => {
+		const id = nextId.current++;
+		setToasts((current) => [...current, { ...toast, id }].slice(-MAX_TOASTS));
+	}, []);
+	return (
+		<ToastContext.Provider value={show}>
+			{children}
+			<div className="pointer-events-none fixed right-4 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] left-4 z-[60] flex flex-col gap-2.5 md:bottom-4 md:left-auto md:w-[380px]">
+				{toasts.map((toast) => (
+					<Toast key={toast.id} toast={toast} onDismiss={() => setToasts((current) => current.filter((item) => item.id !== toast.id))} />
+				))}
+			</div>
+		</ToastContext.Provider>
 	);
 }
 
@@ -741,16 +1011,18 @@ export function DataTable({
 	minWidth = 640,
 	head,
 	bare = false,
+	stacked = false,
 	children,
 }: {
 	minWidth?: number;
 	head: ReactNode[];
 	bare?: boolean;
+	stacked?: boolean;
 	children: ReactNode;
 }) {
 	return (
 		<div className={`overflow-x-auto ${bare ? "" : "rounded-card border border-border bg-card"}`}>
-			<table className="w-full text-left text-[13px]" style={{ minWidth }}>
+			<table className={`w-full text-left text-[13px] ${stacked ? "stack-table" : ""}`} style={stacked ? undefined : { minWidth }}>
 				<thead className="bg-background text-xs text-muted-foreground">
 					<tr>
 						{head.map((title, index) => (

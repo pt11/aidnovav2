@@ -8,6 +8,7 @@ import {
 	Alert,
 	Avatar,
 	buttonClass,
+	ConfirmModal,
 	DataTable,
 	Field,
 	Modal,
@@ -17,9 +18,10 @@ import {
 	SelectField,
 	StatePanel,
 	TextareaField,
+	useToast,
 } from "../ui";
 import { downloadCsv } from "../csv";
-import { ReviewChip, TrainingChip, useCapacityMe, type ReviewStatus, type TrainingStatus } from "./Capacity";
+import { ReviewChip, TrainingChip, useCapacityMe, useRefreshCapacity, type ReviewStatus, type TrainingStatus } from "./Capacity";
 
 const LEVELS = [1, 2, 3, 4, 5];
 
@@ -38,6 +40,7 @@ interface MySkill {
 	assessorName: string | null;
 	revalidateBy: string | null;
 	shared: boolean;
+	canRename: boolean;
 }
 
 interface Badge {
@@ -61,6 +64,7 @@ export interface CatalogSkill {
 	rubric: string[];
 	rubricVersion: number;
 	retired: boolean;
+	addedBy: string | null;
 }
 
 function LevelBars({ level, name }: { level: number; name: string }) {
@@ -92,35 +96,72 @@ export function Toggle({ checked, label, disabled = false, onChange }: { checked
 	);
 }
 
-function NominateDialog({ onClose }: { onClose: () => void }) {
+const SKILL_CATEGORIES = ["leadership", "project_management", "meal", "finance", "digital", "safeguarding", "safety", "community", "health", "communication", "other"];
+
+// Adds a skill, or edits one already on the person's list.
+function NominateDialog({ existing, mine, onClose }: { existing?: MySkill; mine: number[]; onClose: () => void }) {
 	const { t } = useI18n();
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const [skillId, setSkillId] = useState("");
-	const [level, setLevel] = useState("2");
-	const [evidence, setEvidence] = useState("");
+	const [wantsNew, setWantsNew] = useState(false);
+	const [name, setName] = useState(existing?.name ?? "");
+	const [category, setCategory] = useState("other");
+	const [level, setLevel] = useState(String(existing?.pendingLevel ?? existing?.level ?? 2));
+	const [evidence, setEvidence] = useState(existing?.evidence ?? "");
 	const catalog = useQuery({
 		queryKey: ["capacity-skills"],
 		queryFn: () => api<{ skills: CatalogSkill[] }>("/capacity/skills"),
-		select: (data) => data.skills.filter((skill) => !skill.retired),
+		select: (data) => data.skills.filter((skill) => !skill.retired && !mine.includes(skill.id)),
 	});
+	const adding = !existing && (wantsNew || (catalog.isSuccess && catalog.data.length === 0));
 	const save = useMutation({
-		mutationFn: () => api("/capacity/my-skills", { method: "POST", body: { skillId: Number(skillId), level: Number(level), evidence } }),
+		mutationFn: () =>
+			existing
+				? api(`/capacity/my-skills/${existing.id}`, { method: "PATCH", body: { name: existing.canRename ? name : undefined, level: Number(level), evidence } })
+				: api("/capacity/my-skills", { method: "POST", body: adding ? { newSkillName: name, newSkillCategory: category, level: Number(level), evidence } : { skillId: Number(skillId), level: Number(level), evidence } }),
 		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["capacity-my-skills"] });
+			await Promise.all([queryClient.invalidateQueries({ queryKey: ["capacity-my-skills"] }), queryClient.invalidateQueries({ queryKey: ["capacity-skills"] })]);
+			toast.success(t("cb.toast_sent"), t("cb.toast_sent_desc"));
 			onClose();
 		},
 	});
 	const chosen = catalog.data?.find((skill) => skill.id === Number(skillId));
-	const criteria = chosen?.rubric[Number(level) - 1];
+	const criteria = (existing?.rubric ?? chosen?.rubric)?.[Number(level) - 1];
+	const code = save.error instanceof ApiError ? save.error.code : "";
+	const ready = (existing ? !existing.canRename || name.trim() : adding ? name.trim() : skillId) && evidence.trim();
 	return (
-		<Modal title={t("cb.nominate")} description={t("cb.nominate_desc")} open onClose={onClose}>
+		<Modal title={t(existing ? "cb.edit_my_skill" : "cb.nominate")} description={t(existing?.level ? "cb.edit_verified_desc" : "cb.nominate_desc")} open onClose={onClose}>
 			<div className="flex flex-col gap-3.5">
-				{save.isError && <Alert>{t("error.generic")}</Alert>}
-				{catalog.isSuccess && catalog.data.length === 0 && <p className="text-[13px] text-muted-foreground">{t("cb.no_skills_yet")}</p>}
-				<SelectField label={t("cb.skill")} value={skillId} onChange={(event) => setSkillId(event.target.value)}>
-					<option value="">{t("cb.choose")}</option>
-					{catalog.data?.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
-				</SelectField>
+				{save.isError && <Alert>{t(code === "SKILL_EXISTS" ? "cb.skill_exists" : code === "TOO_MANY_SKILLS" ? "cb.too_many_skills" : "error.generic")}</Alert>}
+				{existing ? (
+					existing.canRename ? (
+						<Field label={t("cb.skill_name")} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} />
+					) : (
+						<p className="text-sm"><b>{existing.name}</b></p>
+					)
+				) : adding ? (
+					<div className="flex flex-col gap-3 rounded-[9px] bg-muted p-3">
+						<Field label={t("cb.skill_name")} autoFocus maxLength={120} value={name} onChange={(event) => setName(event.target.value)} />
+						<SelectField label={t("cb.field_category")} value={category} onChange={(event) => setCategory(event.target.value)}>
+							{SKILL_CATEGORIES.map((value) => <option key={value} value={value}>{t(`cb.cat_${value}`)}</option>)}
+						</SelectField>
+						{catalog.data && catalog.data.length > 0 && (
+							<button type="button" className="self-start text-[13px] font-medium text-selected-foreground" onClick={() => setWantsNew(false)}>{t("cb.choose_from_list")}</button>
+						)}
+					</div>
+				) : (
+					<div className="flex flex-col gap-1.5">
+						<SelectField label={t("cb.skill")} value={skillId} onChange={(event) => setSkillId(event.target.value)}>
+							<option value="">{t("cb.choose")}</option>
+							{catalog.data?.map((skill) => <option key={skill.id} value={skill.id}>{skill.name}</option>)}
+						</SelectField>
+						<button type="button" className="inline-flex items-center gap-1 self-start text-[13px] font-medium text-selected-foreground" onClick={() => setWantsNew(true)}>
+							<Plus size={14} aria-hidden="true" />
+							{t("cb.add_new_skill")}
+						</button>
+					</div>
+				)}
 				<div className="flex flex-col gap-1">
 					<SelectField label={t("cb.level_claim")} value={level} onChange={(event) => setLevel(event.target.value)}>
 						{LEVELS.map((value) => <option key={value} value={value}>{`${t(`cb.level_${value}`)} · ${t(`cb.level_${value}_hint`)}`}</option>)}
@@ -130,7 +171,7 @@ function NominateDialog({ onClose }: { onClose: () => void }) {
 				<TextareaField label={t("cb.evidence_note")} hint={t("cb.evidence_note_hint")} rows={3} maxLength={2000} value={evidence} onChange={(event) => setEvidence(event.target.value)} />
 				<div className="flex justify-end gap-2">
 					<button type="button" className={buttonClass("outline")} onClick={onClose}>{t("common.cancel")}</button>
-					<button type="button" disabled={!skillId || !evidence.trim() || save.isPending} className={buttonClass()} onClick={() => save.mutate()}>{t("cb.send_for_assessment")}</button>
+					<button type="button" disabled={!ready || save.isPending} className={buttonClass()} onClick={() => save.mutate()}>{t("cb.send_for_assessment")}</button>
 				</div>
 			</div>
 		</Modal>
@@ -150,6 +191,8 @@ interface Assessment {
 
 function AssessDialog({ item, onClose }: { item: Assessment; onClose: () => void }) {
 	const { t } = useI18n();
+	const refreshCapacity = useRefreshCapacity();
+	const toast = useToast();
 	const queryClient = useQueryClient();
 	const [level, setLevel] = useState(item.pendingLevel);
 	const [feedback, setFeedback] = useState("");
@@ -157,7 +200,8 @@ function AssessDialog({ item, onClose }: { item: Assessment; onClose: () => void
 	const decide = useMutation({
 		mutationFn: (decline: boolean) => api(`/capacity/assessments/${item.id}`, { method: "POST", body: { level, feedback, privateNote: note, decline } }),
 		onSuccess: async () => {
-			await queryClient.invalidateQueries({ queryKey: ["capacity-assessments"] });
+			await Promise.all([queryClient.invalidateQueries({ queryKey: ["capacity-assessments"] }), refreshCapacity()]);
+			toast.success(t("cb.toast_assessed", { name: item.ownerName }));
 			onClose();
 		},
 	});
@@ -204,6 +248,8 @@ export function CapacitySkillsPage() {
 	const queryClient = useQueryClient();
 	const me = useCapacityMe();
 	const [nominating, setNominating] = useState(false);
+	const [editing, setEditing] = useState<MySkill | null>(null);
+	const [removing, setRemoving] = useState<MySkill | null>(null);
 	const [assessing, setAssessing] = useState<Assessment | null>(null);
 	const data = useQuery({
 		queryKey: ["capacity-my-skills"],
@@ -216,8 +262,22 @@ export function CapacitySkillsPage() {
 		enabled: !!me.data?.reportScopes.length,
 	});
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ["capacity-my-skills"] });
-	const shareSkill = useMutation({ mutationFn: ({ id, shared }: { id: number; shared: boolean }) => api(`/capacity/my-skills/${id}/share`, { method: "PUT", body: { shared } }), onSuccess: refresh });
-	const shareBadge = useMutation({ mutationFn: ({ key, shared }: { key: string; shared: boolean }) => api("/capacity/my-badges/share", { method: "PUT", body: { key, shared } }), onSuccess: refresh });
+	const removeSkill = useMutation({
+		mutationFn: (id: number) => api(`/capacity/my-skills/${id}`, { method: "DELETE" }),
+		onSuccess: async () => {
+			await Promise.all([refresh(), queryClient.invalidateQueries({ queryKey: ["capacity-skills"] })]);
+			toast.success(t("cb.toast_removed", { name: removing?.name ?? "" }));
+			setRemoving(null);
+		},
+	});
+	const toast = useToast();
+	const shareFailed = () => toast.error(t("toast.failed"), t("toast.try_again"));
+	const shareDone = async (_: unknown, { shared }: { shared: boolean }) => {
+		await refresh();
+		toast.success(t(shared ? "cb.toast_shared" : "cb.toast_private"));
+	};
+	const shareSkill = useMutation({ mutationFn: ({ id, shared }: { id: number; shared: boolean }) => api(`/capacity/my-skills/${id}/share`, { method: "PUT", body: { shared } }), onSuccess: shareDone, onError: shareFailed });
+	const shareBadge = useMutation({ mutationFn: ({ key, shared }: { key: string; shared: boolean }) => api("/capacity/my-badges/share", { method: "PUT", body: { key, shared } }), onSuccess: shareDone, onError: shareFailed });
 	if (data.isPending) return <PageLoading />;
 	if (data.isError) return <PageError onRetry={() => data.refetch()} />;
 	const { skills, badges } = data.data;
@@ -255,7 +315,7 @@ export function CapacitySkillsPage() {
 						{skills.length === 0 ? (
 							<div className="border-t border-border"><StatePanel icon={Sparkles} title={t("cb.no_my_skills")} description={t("cb.no_my_skills_desc")} /></div>
 						) : (
-							<DataTable bare minWidth={640} head={[t("cb.skill"), t("cb.level"), t("cb.assessment"), t("cb.directory")]}>
+							<DataTable bare minWidth={660} head={[t("cb.skill"), t("cb.level"), t("cb.assessment"), t("cb.directory"), ""]}>
 								{skills.map((skill) => (
 									<tr key={skill.id}>
 										<td className="px-3 py-3 first:pl-4">
@@ -287,6 +347,12 @@ export function CapacitySkillsPage() {
 											) : (
 												<span className="text-xs text-muted-foreground">{t("cb.share_after")}</span>
 											)}
+										</td>
+										<td className="px-3 py-3 last:pr-4">
+											<span className="flex flex-col items-start gap-1.5 whitespace-nowrap text-[13px] font-medium">
+												<button type="button" aria-label={t("cb.edit_named", { name: skill.name })} className="text-selected-foreground" onClick={() => setEditing(skill)}>{t("common.edit")}</button>
+												<button type="button" aria-label={t("cb.remove_named", { name: skill.name })} className="text-danger-foreground" onClick={() => setRemoving(skill)}>{t("cb.remove")}</button>
+											</span>
 										</td>
 									</tr>
 								))}
@@ -339,7 +405,18 @@ export function CapacitySkillsPage() {
 					</dl>
 				</section>
 			</div>
-			{nominating && <NominateDialog onClose={() => setNominating(false)} />}
+			{nominating && <NominateDialog mine={skills.map((skill) => skill.skillId)} onClose={() => setNominating(false)} />}
+			{editing && <NominateDialog existing={editing} mine={[]} onClose={() => setEditing(null)} />}
+			<ConfirmModal
+				title={t("cb.remove_skill_title", { name: removing?.name ?? "" })}
+				description={t(removing?.level ? "cb.remove_verified_desc" : "cb.remove_skill_desc")}
+				confirmLabel={t("cb.remove")}
+				open={!!removing}
+				pending={removeSkill.isPending}
+				failed={removeSkill.isError}
+				onConfirm={() => removing && removeSkill.mutate(removing.id)}
+				onClose={() => setRemoving(null)}
+			/>
 			{assessing && <AssessDialog item={assessing} onClose={() => setAssessing(null)} />}
 		</div>
 	);
@@ -513,7 +590,7 @@ export function SkillCatalogTab() {
 		mutationFn: () => api("/capacity/skills/starter", { method: "POST" }),
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["capacity-skills"] }),
 	});
-	if (catalog.isPending) return <PageLoading />;
+	if (catalog.isPending) return <PageLoading variant="inline" />;
 	if (catalog.isError) return <PageError onRetry={() => catalog.refetch()} />;
 	return (
 		<div className="flex flex-col gap-3">
@@ -528,7 +605,7 @@ export function SkillCatalogTab() {
 				<DataTable minWidth={620} head={[t("cb.skill"), t("cb.field_category"), t("cb.rubric"), t("cb.revalidate"), ""]}>
 					{catalog.data.map((skill) => (
 						<tr key={skill.id} className={skill.retired ? "opacity-60" : ""}>
-							<td className="px-3 py-2.5 first:pl-4"><b className="break-words">{skill.name}</b>{skill.retired && <span className="ml-2 text-xs text-muted-foreground">{t("cb.retired")}</span>}</td>
+							<td className="px-3 py-2.5 first:pl-4"><b className="break-words">{skill.name}</b>{skill.retired && <span className="ml-2 text-xs text-muted-foreground">{t("cb.retired")}</span>}{skill.addedBy && <span className="block text-xs font-normal text-muted-foreground">{t("cb.added_by", { name: skill.addedBy })}</span>}</td>
 							<td className="px-3 py-2.5">{skill.category ? t(`cb.cat_${skill.category}`) : "—"}</td>
 							<td className="px-3 py-2.5 text-muted-foreground">
 								<span className="inline-flex items-center gap-1">
@@ -575,7 +652,7 @@ function SkillDialog({ skill, onClose }: { skill: CatalogSkill | null; onClose: 
 				<div className="grid gap-3 sm:grid-cols-3">
 					<div className="sm:col-span-1"><Field label={t("cb.skill_name")} maxLength={120} value={name} onChange={(event) => setName(event.target.value)} /></div>
 					<SelectField label={t("cb.field_category")} value={category} onChange={(event) => setCategory(event.target.value)}>
-						{["leadership", "project_management", "meal", "finance", "digital", "safeguarding", "safety", "community", "health", "communication", "other"].map((value) => <option key={value} value={value}>{t(`cb.cat_${value}`)}</option>)}
+						{SKILL_CATEGORIES.map((value) => <option key={value} value={value}>{t(`cb.cat_${value}`)}</option>)}
 					</SelectField>
 					<SelectField label={t("cb.revalidate")} value={months} onChange={(event) => setMonths(event.target.value)}>
 						<option value="">{t("cb.never")}</option>

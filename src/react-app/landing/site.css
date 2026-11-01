@@ -3781,3 +3781,24 @@ html:lang(my) .trust-row {
 html:lang(my) .faq-item button {
 	font-size: 15px;
 }
+
+.coming-soon-card {
+	max-width: 760px;
+	margin: 0 auto;
+	padding: 40px;
+	border: 1px dashed var(--input);
+	border-radius: 16px;
+	background: var(--card);
+	text-align: center;
+}
+
+.coming-soon-card p {
+	margin: 12px 0 0;
+	color: var(--muted-foreground);
+}
+
+@media (max-width: 600px) {
+	.coming-soon-card {
+		padding: 28px 20px;
+	}
+}

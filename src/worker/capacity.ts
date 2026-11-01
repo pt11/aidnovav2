@@ -1,8 +1,9 @@
-import { and, desc, eq, inArray, like, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, like, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import type { Db } from "./db";
 import {
+	capacityUserSkills,
 	auditLog,
 	capacityTeamReviewers,
 	departments,
@@ -274,7 +275,12 @@ capacityRoutes.get("/capacity/me", ...gate, async (c) => {
 	const userId = c.get("user").id;
 	const routing = await loadRouting(db, c.get("org").organizationId);
 	const waiting = await reviewQueue(db, c.get("org").organizationId, userId, routing);
+	const pendingSkills = await db
+		.select({ userId: capacityUserSkills.userId })
+		.from(capacityUserSkills)
+		.where(and(eq(capacityUserSkills.organizationId, c.get("org").organizationId), isNotNull(capacityUserSkills.pendingLevel)));
 	return c.json({
+		assessCount: pendingSkills.filter((row) => routing.reviewersFor(row.userId).some((person) => person.userId === userId)).length,
 		reviewers: routing.reviewersFor(userId).map((person) => person.name),
 		inDepartment: !!routing.byId.get(userId)?.departmentId,
 		canReview: waiting.isReviewer,
@@ -587,7 +593,7 @@ capacityRoutes.get("/capacity/records/:id/evidence/:evidenceId", ...gate, async 
 	});
 });
 
-async function reviewQueue(
+export async function reviewQueue(
 	db: Db,
 	organizationId: number,
 	userId: string,

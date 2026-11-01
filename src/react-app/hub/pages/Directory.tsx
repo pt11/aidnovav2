@@ -4,7 +4,7 @@ import { Contact, Check } from "lucide-react";
 import { Link } from "wouter";
 import { api } from "../api";
 import { useI18n } from "../i18n";
-import { Alert, buttonClass, FilterSelect, PageError, PageHeader, PageLoading, StatePanel, TextareaField } from "../ui";
+import { Alert, buttonClass, useToast, FilterSelect, PageError, PageHeader, PageLoading, StatePanel, TextareaField } from "../ui";
 import { Toggle } from "./CapacitySkills";
 
 interface Card {
@@ -79,14 +79,78 @@ function DirectoryCard({ card }: { card: Card }) {
 	);
 }
 
+// Tells people why they aren't in the list, instead of leaving them to guess.
+function MyListing({ data }: { data: MyProfile }) {
+	const { t } = useI18n();
+	const { listed, displayName, displayNameApproved } = data.profile;
+	if (listed && (!displayName || (displayNameApproved && data.rules.allowDisplayNames))) return null;
+	const message = !listed
+		? t("dir.status_not_listed")
+		: !data.rules.allowDisplayNames
+			? t("dir.status_names_off", { name: displayName ?? "" })
+			: t("dir.status_pending", { name: displayName ?? "" });
+	return <Alert tone={listed ? "warning" : "info"}>{message}</Alert>;
+}
+
+function useRefreshDirectory() {
+	const queryClient = useQueryClient();
+	return () =>
+		Promise.all(["directory", "directory-me", "directory-settings"].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+}
+
+function PendingNames({ pending, hideWhenEmpty = false }: { pending: { id: number; displayName: string; person: string }[]; hideWhenEmpty?: boolean }) {
+	const { t } = useI18n();
+	const refresh = useRefreshDirectory();
+	const toast = useToast();
+	const decide = useMutation({
+		mutationFn: ({ id, approve }: { id: number; approve: boolean }) => api(`/directory/display-names/${id}`, { method: "POST", body: { approve } }),
+		onSuccess: async (_, { approve }) => {
+			await refresh();
+			toast.success(t(approve ? "dir.toast_approved" : "dir.toast_declined"));
+		},
+		onError: () => toast.error(t("toast.failed"), t("toast.try_again")),
+	});
+	if (hideWhenEmpty && pending.length === 0) return null;
+	return (
+		<section className="rounded-card border border-border bg-card p-4">
+			<h2 className="mb-2 text-[15px] font-semibold">{t("dir.pending_names")}</h2>
+			{pending.length === 0 ? (
+				<p className="text-[13px] text-muted-foreground">{t("dir.no_pending")}</p>
+			) : (
+				<ul className="flex flex-col gap-2 text-[13px]">
+					{pending.map((item) => (
+						<li key={item.id} className="flex flex-wrap items-center gap-2">
+							<span className="min-w-0 flex-1 break-words"><b>{item.displayName}</b> · {item.person}</span>
+							<button type="button" disabled={decide.isPending} className={buttonClass("outline", "min-h-8 px-3 py-0")} onClick={() => decide.mutate({ id: item.id, approve: false })}>{t("dir.decline")}</button>
+							<button type="button" disabled={decide.isPending} className={buttonClass("primary", "min-h-8 px-3 py-0")} onClick={() => decide.mutate({ id: item.id, approve: true })}>{t("dir.approve")}</button>
+						</li>
+					))}
+				</ul>
+			)}
+		</section>
+	);
+}
+
+interface DirectorySettings {
+	rules: Rules;
+	pending: { id: number; displayName: string; person: string }[];
+}
+
 export function DirectoryPage() {
 	const { t } = useI18n();
+	const mine = useQuery({ queryKey: ["directory-me"], queryFn: () => api<MyProfile>("/directory/me") });
+	const settings = useQuery({
+		queryKey: ["directory-settings"],
+		queryFn: () => api<DirectorySettings>("/directory/settings"),
+		enabled: !!mine.data?.isAdmin,
+		retry: false,
+	});
 	const [query, setQuery] = useState("");
 	const [area, setArea] = useState("all");
 	const [level, setLevel] = useState("any");
 	const data = useQuery({ queryKey: ["directory"], queryFn: () => api<{ cards: Card[]; staff: number }>("/directory") });
 	const cards = useMemo(() => data.data?.cards ?? [], [data.data]);
-	if (data.isPending) return <PageLoading />;
+	if (data.isPending) return <PageLoading variant="cards" />;
 	if (data.isError) return <PageError onRetry={() => data.refetch()} />;
 	const text = query.trim().toLowerCase();
 	const areas = [...new Set(cards.flatMap((card) => card.skills.map((skill) => skill.category).filter((value): value is string => !!value)))];
@@ -98,7 +162,14 @@ export function DirectoryPage() {
 	});
 	return (
 		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
-			<PageHeader title={t("dir.title")} subtitle={t("dir.desc")} action={<Link href="/directory/privacy" className={buttonClass("outline")}>{t("dir.edit_mine")}</Link>} />
+			<PageHeader title={t("dir.title")} subtitle={t("dir.desc")} action={
+				<div className="flex flex-wrap gap-2">
+					{mine.data?.isAdmin && <Link href="/directory/rules" className={buttonClass("ghost")}>{t("cb.tab_directory")}</Link>}
+					<Link href="/directory/privacy" className={buttonClass("outline")}>{t("dir.edit_mine")}</Link>
+				</div>
+			} />
+			{mine.data && <MyListing data={mine.data} />}
+			{settings.data && <PendingNames pending={settings.data.pending} hideWhenEmpty />}
 			<div className="flex flex-wrap items-center gap-2">
 				<input
 					type="search"
@@ -140,12 +211,12 @@ export function DirectoryPage() {
 interface MyProfile {
 	profile: { listed: boolean; displayName: string | null; displayNameApproved: boolean; picture: "photo" | "initials" | "pattern"; showTitle: boolean; showTeam: boolean; bio: string | null };
 	rules: Rules;
+	isAdmin: boolean;
 	me: { name: string; position: string | null; team: string | null; photoUrl: string | null };
 }
 
 function PrivacyForm({ data }: { data: MyProfile }) {
 	const { t } = useI18n();
-	const queryClient = useQueryClient();
 	const { rules, me } = data;
 	const [listed, setListed] = useState(data.profile.listed);
 	const [useDisplay, setUseDisplay] = useState(rules.allowDisplayNames && !!data.profile.displayName);
@@ -154,10 +225,19 @@ function PrivacyForm({ data }: { data: MyProfile }) {
 	const [showTitle, setShowTitle] = useState(data.profile.showTitle);
 	const [showTeam, setShowTeam] = useState(data.profile.showTeam);
 	const [bio, setBio] = useState(data.profile.bio ?? "");
+	const refresh = useRefreshDirectory();
+	const toast = useToast();
 	const save = useMutation({
-		mutationFn: () => api<{ displayNamePending: boolean }>("/directory/me", { method: "PUT", body: { listed, displayName: useDisplay ? displayName : "", picture, showTitle, showTeam, bio } }),
-		onSuccess: () => Promise.all([queryClient.invalidateQueries({ queryKey: ["directory-me"] }), queryClient.invalidateQueries({ queryKey: ["directory"] })]),
+		mutationFn: (nextListed?: boolean) => api<{ displayNamePending: boolean }>("/directory/me", { method: "PUT", body: { listed: nextListed ?? listed, displayName: useDisplay ? displayName : "", picture, showTitle, showTeam, bio } }),
+		onSuccess: refresh,
 	});
+	const unsaved =
+		listed !== data.profile.listed ||
+		(useDisplay ? displayName.trim() : "") !== (data.profile.displayName ?? "") ||
+		picture !== data.profile.picture ||
+		showTitle !== data.profile.showTitle ||
+		showTeam !== data.profile.showTeam ||
+		bio.trim() !== (data.profile.bio ?? "");
 	const approved = useDisplay && displayName === data.profile.displayName && data.profile.displayNameApproved;
 	const named = useDisplay && !!displayName.trim();
 	const previewName = named ? displayName : me.name;
@@ -176,7 +256,22 @@ function PrivacyForm({ data }: { data: MyProfile }) {
 		<div className="grid items-start gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
 			<div className="flex min-w-0 flex-col gap-4">
 				<section className="rounded-card border border-border bg-card px-4 py-1">
-					{row(t("dir.show_me"), t("dir.show_me_hint"), <Toggle checked={listed} label={t("dir.show_me")} onChange={setListed} />)}
+					{row(t("dir.show_me"), t("dir.show_me_hint"), <Toggle
+						checked={listed}
+						label={t("dir.show_me")}
+						disabled={save.isPending}
+						onChange={(value) => {
+							// This is the one people expect to work on its own, like the other switches.
+							setListed(value);
+							save.mutate(value, {
+								onSuccess: () => toast.success(t(value ? "dir.toast_on" : "dir.toast_off")),
+								onError: () => {
+									setListed(!value);
+									toast.error(t("toast.failed"), t("toast.try_again"));
+								},
+							});
+						}}
+					/>)}
 					<div className="flex flex-col gap-2 border-t border-border py-3 text-[13px]">
 						<b className="text-sm">{t("dir.name_shown")}</b>
 						<label className="flex items-center gap-2">
@@ -245,9 +340,13 @@ function PrivacyForm({ data }: { data: MyProfile }) {
 				/>
 				<p className="text-xs text-muted-foreground">{t(!listed ? "dir.preview_hidden" : named && !approved ? "dir.preview_waiting" : "dir.preview_listed")}</p>
 				{save.isError && <Alert>{t("error.generic")}</Alert>}
-				{save.isSuccess && <p role="status" className="text-[13px] text-muted-foreground">{t(save.data.displayNamePending ? "dir.saved_pending" : "common.saved")}</p>}
+				{unsaved && !save.isPending ? (
+					<p role="status" className="text-[13px] font-medium">{t("dir.unsaved")}</p>
+				) : (
+					save.isSuccess && <p role="status" className="text-[13px] text-muted-foreground">{t(save.data.displayNamePending ? "dir.saved_pending" : "common.saved")}</p>
+				)}
 				<div className="flex justify-end">
-					<button type="button" disabled={save.isPending || (useDisplay && !displayName.trim())} className={buttonClass()} onClick={() => save.mutate()}>{t("common.save")}</button>
+					<button type="button" disabled={save.isPending || (useDisplay && !displayName.trim())} className={buttonClass()} onClick={() => save.mutate(undefined)}>{t("common.save")}</button>
 				</div>
 			</aside>
 		</div>
@@ -269,16 +368,14 @@ export function DirectoryPrivacyPage() {
 
 export function DirectoryRulesTab() {
 	const { t } = useI18n();
-	const queryClient = useQueryClient();
 	const data = useQuery({
 		queryKey: ["directory-settings"],
-		queryFn: () => api<{ rules: Rules; pending: { id: number; displayName: string; person: string }[] }>("/directory/settings"),
+		queryFn: () => api<DirectorySettings>("/directory/settings"),
 		retry: false,
 	});
-	const refresh = () => queryClient.invalidateQueries({ queryKey: ["directory-settings"] });
+	const refresh = useRefreshDirectory();
 	const save = useMutation({ mutationFn: (rules: Rules) => api("/directory/settings", { method: "PUT", body: rules }), onSuccess: refresh });
-	const decide = useMutation({ mutationFn: ({ id, approve }: { id: number; approve: boolean }) => api(`/directory/display-names/${id}`, { method: "POST", body: { approve } }), onSuccess: refresh });
-	if (data.isPending) return <PageLoading />;
+	if (data.isPending) return <PageLoading variant="inline" />;
 	if (data.isError) return <StatePanel icon={Contact} title={t("dir.module_off")} description={t("dir.module_off_desc")} />;
 	const { rules, pending } = data.data;
 	const row = (key: keyof Rules, title: string, hint: string) => (
@@ -294,22 +391,19 @@ export function DirectoryRulesTab() {
 				{row("showTeams", t("dir.rule_teams"), t("dir.rule_teams_hint"))}
 				{row("allowPhotos", t("dir.rule_photos"), t("dir.rule_photos_hint"))}
 			</section>
-			<section className="rounded-card border border-border bg-card p-4">
-				<h2 className="mb-2 text-[15px] font-semibold">{t("dir.pending_names")}</h2>
-				{pending.length === 0 ? (
-					<p className="text-[13px] text-muted-foreground">{t("dir.no_pending")}</p>
-				) : (
-					<ul className="flex flex-col gap-2 text-[13px]">
-						{pending.map((item) => (
-							<li key={item.id} className="flex flex-wrap items-center gap-2">
-								<span className="min-w-0 flex-1 break-words"><b>{item.displayName}</b> · {item.person}</span>
-								<button type="button" className={buttonClass("outline", "min-h-8 px-3 py-0")} onClick={() => decide.mutate({ id: item.id, approve: false })}>{t("dir.decline")}</button>
-								<button type="button" className={buttonClass("primary", "min-h-8 px-3 py-0")} onClick={() => decide.mutate({ id: item.id, approve: true })}>{t("dir.approve")}</button>
-							</li>
-						))}
-					</ul>
-				)}
-			</section>
+			<PendingNames pending={pending} />
+		</div>
+	);
+}
+
+// Organizations can use People & Skills without Capacity Building, so the rules
+// need a home of their own.
+export function DirectoryRulesPage() {
+	const { t } = useI18n();
+	return (
+		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
+			<PageHeader title={t("cb.tab_directory")} subtitle={t("dir.rules_desc")} action={<Link href="/directory" className={buttonClass("outline")}>{t("dir.title")}</Link>} />
+			<DirectoryRulesTab />
 		</div>
 	);
 }

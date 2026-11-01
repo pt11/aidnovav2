@@ -638,7 +638,7 @@ export function SettingsPlanPage({ org }: { org: Membership }) {
 		new Date(value).toLocaleDateString(language, { dateStyle: "long" });
 	return (
 		<SettingsLayout canManage isAdmin={org.role === "admin"} title={t("plan.title")} subtitle={t("plan.desc")}>
-			{plan.isPending && <PageLoading />}
+			{plan.isPending && <PageLoading variant="inline" />}
 			{plan.isError && <PageError onRetry={() => plan.refetch()} />}
 			{data && (
 				<>
@@ -771,7 +771,7 @@ export function SettingsGeneralPage({ org }: { org: Membership }) {
 			title={t("settings.general")}
 			subtitle={t("settings.general_desc")}
 		>
-			{details.isPending && <PageLoading />}
+			{details.isPending && <PageLoading variant="inline" />}
 			{details.isError && <PageError onRetry={() => details.refetch()} />}
 			<LogoSection org={org} canEdit={org.role === "admin"} />
 			{details.data && (
@@ -933,7 +933,7 @@ export function SettingsDepartmentsPage({ isAdmin }: { isAdmin: boolean }) {
 				)}
 			</form>
 
-			{departments.isPending && <PageLoading />}
+			{departments.isPending && <PageLoading variant="inline" />}
 			{departments.isError && <PageError onRetry={() => departments.refetch()} />}
 			{departments.data && (
 				<div className="overflow-x-auto rounded-card border border-border bg-card">
@@ -1209,7 +1209,7 @@ export function SettingsProfilePage({ me, org }: { me: Me; org: Membership }) {
 			subtitle={t("profile.desc", { organization: org.name })}
 		>
 			<PhotoSection me={me} org={org} />
-			{profile.isPending && <PageLoading />}
+			{profile.isPending && <PageLoading variant="inline" />}
 			{profile.isError && <PageError onRetry={() => profile.refetch()} />}
 			{profile.data && <ProfileForm me={me} org={org} profile={profile.data} />}
 			<MyCertificates />
@@ -1647,7 +1647,7 @@ function SessionsSection() {
 					<Alert>{t("error.generic")}</Alert>
 				</div>
 			)}
-			{sessions.isPending && <PageLoading />}
+			{sessions.isPending && <PageLoading variant="inline" />}
 			{sessions.isError && <PageError onRetry={() => sessions.refetch()} />}
 			<ul className="mt-3 flex flex-col gap-2.5 text-[13px]">
 				{sessions.data?.sessions.map((session) => {
@@ -1764,7 +1764,7 @@ export function SettingsStaffSignInPage({ me }: { me: Me }) {
 	const tooMany = send.error instanceof ApiError && send.error.code === "TOO_MANY_EMAILS";
 	return (
 		<SettingsLayout canManage isAdmin title={t("signin.title")} subtitle={t("signin.desc")}>
-			{members.isPending && <PageLoading />}
+			{members.isPending && <PageLoading variant="inline" />}
 			{members.isError && <PageError onRetry={() => members.refetch()} />}
 			{members.data && (
 				<section className="flex flex-col gap-3.5 rounded-card border border-border bg-card p-5">

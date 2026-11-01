@@ -265,7 +265,7 @@ export function ProjectFilesTab({ projectId, projectName }: { projectId: number;
 		}
 	}
 
-	if (data.isPending) return <PageLoading />;
+	if (data.isPending) return <PageLoading variant="inline" />;
 	if (data.isError) return <PageError onRetry={() => data.refetch()} />;
 	const { folders, files, usedBytes, canContribute, canManage } = data.data;
 	const text = query.trim().toLowerCase();

@@ -1,11 +1,15 @@
 import { Children, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+	Award,
 	Building2,
 	CalendarClock,
 	ChevronRight,
 	CircleAlert,
+	ClipboardCheck,
+	Contact,
 	FileText,
+	FolderKanban,
 	GraduationCap,
 	Mail,
 	Megaphone,
@@ -18,6 +22,7 @@ import { api, type Me } from "../api";
 import { useI18n } from "../i18n";
 import { ActionsMenu, Avatar, BUTTON_SMALL, buttonClass, Chip, PageError, PageLoading } from "../ui";
 import { PriorityBadge, type Priority } from "./Announcements";
+import { periodLabel } from "./ProjectReports";
 
 interface ManagerData {
 	compliance: {
@@ -169,23 +174,64 @@ function AttentionRow({
 	);
 }
 
+type Task =
+	| { kind: "training_changes"; title: string; href: string }
+	| { kind: "report_revise"; title: string; period: string | null; label: string | null; href: string }
+	| { kind: "report_review"; title: string; count: number; href: string }
+	| { kind: "training_reviews" | "skills_assess" | "display_names"; count: number; href: string };
+
+const TASK_ICONS: Record<Task["kind"], LucideIcon> = {
+	training_changes: Award,
+	training_reviews: ClipboardCheck,
+	skills_assess: Award,
+	report_revise: FolderKanban,
+	report_review: FolderKanban,
+	display_names: Contact,
+};
+
 function ToDoCard({
 	policies,
 	courses,
+	tasks,
 }: {
 	policies: DashboardData["pendingPolicies"];
 	courses: DashboardData["pendingCourses"];
+	tasks: Task[];
 }) {
-	const { t } = useI18n();
+	const { t, language } = useI18n();
+	const taskText = (task: Task) => {
+		if (task.kind === "training_changes") return { title: t("dashboard.task_training_changes"), detail: task.title };
+		if (task.kind === "report_revise") return { title: t("dashboard.task_report_revise"), detail: `${task.title} · ${task.period ? periodLabel(task.period, language) : (task.label ?? "")}` };
+		if (task.kind === "report_review") return { title: t("dashboard.task_report_review", { count: task.count }), detail: task.title };
+		return { title: t(`dashboard.task_${task.kind}`, { count: task.count }), detail: t(`dashboard.task_${task.kind}_detail`) };
+	};
 	return (
 		<section className="rounded-card bg-primary p-4 text-primary-foreground">
 			<div className="flex items-center justify-between gap-3">
 				<h2 className="font-semibold">{t("dashboard.todo")}</h2>
 				<span className="rounded-full bg-card px-2 text-xs font-semibold text-selected-foreground">
-					{policies.length + courses.length}
+					{policies.length + courses.length + tasks.length}
 				</span>
 			</div>
 			<ul className="mt-3 flex flex-col gap-2">
+				{tasks.map((task) => {
+					const Icon = TASK_ICONS[task.kind];
+					const text = taskText(task);
+					return (
+						<li key={`${task.kind}-${task.href}-${text.detail}`}>
+							<Link href={task.href} className="flex items-center gap-2.5 rounded-[9px] bg-card px-3 py-2.5 text-foreground no-underline hover:bg-muted">
+								<span className="grid size-[34px] shrink-0 place-items-center rounded-md bg-muted text-selected-foreground">
+									<Icon size={16} aria-hidden="true" />
+								</span>
+								<span className="min-w-0 flex-1">
+									<span className="block font-semibold">{text.title}</span>
+									<span className="block break-words text-xs text-muted-foreground">{text.detail}</span>
+								</span>
+								<ChevronRight size={16} aria-hidden="true" className="shrink-0 text-muted-foreground" />
+							</Link>
+						</li>
+					);
+				})}
 				{courses.slice(0, 5).map((course) => (
 					<li key={`course-${course.id}`}>
 						<Link
@@ -299,8 +345,15 @@ export function DashboardPage({ me }: { me: Me }) {
 		queryKey: ["dashboard"],
 		queryFn: () => api<DashboardData>("/dashboard"),
 	});
+	// Fresh every visit, so something just done doesn't linger on the list.
+	const myTasks = useQuery({
+		queryKey: ["my-tasks"],
+		queryFn: () => api<{ tasks: Task[] }>("/my-tasks"),
+		select: (result) => result.tasks,
+		staleTime: 0,
+	});
 
-	if (dashboard.isPending) return <PageLoading />;
+	if (dashboard.isPending) return <PageLoading variant="dashboard" />;
 	if (dashboard.isError) return <PageError onRetry={() => dashboard.refetch()} />;
 
 	const data = dashboard.data;
@@ -342,7 +395,8 @@ export function DashboardPage({ me }: { me: Me }) {
 			manager.reviewDue.length
 		: 0;
 
-	const hasToDo = data.pendingPolicies.length + data.pendingCourses.length > 0;
+	const tasks = myTasks.data ?? [];
+	const hasToDo = data.pendingPolicies.length + data.pendingCourses.length + tasks.length > 0;
 
 	return (
 		<div className="mx-auto flex max-w-[1180px] flex-col gap-5 p-4 md:px-6 md:py-7">
@@ -442,7 +496,7 @@ export function DashboardPage({ me }: { me: Me }) {
 				{(hasToDo || (manager && needsAttention)) && (
 				<div className="flex min-w-0 flex-[2_1_520px] flex-col gap-4">
 					{hasToDo && (
-						<ToDoCard policies={data.pendingPolicies} courses={data.pendingCourses} />
+						<ToDoCard policies={data.pendingPolicies} courses={data.pendingCourses} tasks={tasks} />
 					)}
 					{manager && needsAttention && (
 						<section className="rounded-card border border-border bg-card">

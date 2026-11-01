@@ -28,6 +28,7 @@ const gate = [requireUser, requireOrg, requireModule("capacity_building")] as co
 const directoryGate = [requireUser, requireOrg, requireModule("people_directory")] as const;
 const LEVELS = [1, 2, 3, 4, 5];
 const COMPETENCY_LEVEL = 3;
+const MAX_ADDED_SKILLS = 30;
 const CATEGORIES = ["leadership", "project_management", "meal", "finance", "digital", "safeguarding", "safety", "community", "health", "communication", "other"];
 
 // A starting point that organizations edit. Rubrics are theirs to write.
@@ -68,8 +69,19 @@ function readSkill(body: Record<string, unknown>) {
 }
 
 capacitySkillRoutes.get("/capacity/skills", ...gate, async (c) => {
-	const skills = await c.get("db").select().from(capacitySkills).where(eq(capacitySkills.organizationId, c.get("org").organizationId)).orderBy(capacitySkills.name);
-	return c.json({ skills: skills.map((skill) => ({ ...skill, rubric: JSON.parse(skill.rubric) as string[] })) });
+	const db = c.get("db");
+	const organizationId = c.get("org").organizationId;
+	const [skills, routing] = await Promise.all([
+		db.select().from(capacitySkills).where(eq(capacitySkills.organizationId, organizationId)).orderBy(capacitySkills.name),
+		loadRouting(db, organizationId),
+	]);
+	return c.json({
+		skills: skills.map(({ createdBy, ...skill }) => ({
+			...skill,
+			addedBy: createdBy ? (routing.byId.get(createdBy)?.name ?? null) : null,
+			rubric: JSON.parse(skill.rubric) as string[],
+		})),
+	});
 });
 
 capacitySkillRoutes.post("/capacity/skills", ...gate, requireRole("admin"), async (c) => {
@@ -163,6 +175,11 @@ capacitySkillRoutes.get("/capacity/my-skills", ...gate, async (c) => {
 		loadRouting(db, organizationId),
 	]);
 	const shared = new Set(shares.map((share) => share.badgeKey));
+	const others = new Set(
+		(await db.select({ skillId: capacityUserSkills.skillId, userId: capacityUserSkills.userId }).from(capacityUserSkills).where(eq(capacityUserSkills.organizationId, organizationId)))
+			.filter((row) => row.userId !== userId)
+			.map((row) => row.skillId),
+	);
 	const name = (id: string | null) => (id ? (routing.byId.get(id)?.name ?? null) : null);
 	return c.json({
 		skills: rows.map(({ row, skill }) => ({
@@ -180,10 +197,34 @@ capacitySkillRoutes.get("/capacity/my-skills", ...gate, async (c) => {
 			assessorName: name(row.assessedBy),
 			revalidateBy: expiry(row.assessedAt, skill.revalidateMonths),
 			shared: row.shared,
+			// Only a skill they added, nobody else uses, and nobody has assessed yet.
+			canRename: skill.createdBy === userId && row.level === null && !others.has(skill.id),
 		})),
 		badges: badges.map((badge) => ({ ...badge, shared: badge.shareable && shared.has(badge.key) })),
 	});
 });
+
+// Picks a skill from the list, or adds a new one. A name already on the list is
+// reused, so the catalog doesn't fill up with the same skill spelled twice.
+async function skillToNominate(db: Db, organizationId: number, userId: string, body: Record<string, unknown>) {
+	const name = cleanText(body.newSkillName);
+	if (!name) {
+		const [skill] = await db.select().from(capacitySkills).where(and(eq(capacitySkills.id, Number(body.skillId)), eq(capacitySkills.organizationId, organizationId), eq(capacitySkills.retired, false)));
+		return skill ?? null;
+	}
+	if (name.length > 120) return null;
+	const existing = await db.select().from(capacitySkills).where(eq(capacitySkills.organizationId, organizationId));
+	const same = existing.find((skill) => skill.name.toLowerCase() === name.toLowerCase());
+	if (same) {
+		if (!same.retired) return same;
+		const [revived] = await db.update(capacitySkills).set({ retired: false }).where(eq(capacitySkills.id, same.id)).returning();
+		return revived;
+	}
+	if (existing.filter((skill) => skill.createdBy === userId).length >= MAX_ADDED_SKILLS) return "TOO_MANY" as const;
+	const category = CATEGORIES.includes(String(body.newSkillCategory)) ? String(body.newSkillCategory) : "other";
+	const [created] = await db.insert(capacitySkills).values({ organizationId, name, category, createdBy: userId, rubric: JSON.stringify(["", "", "", "", ""]) }).returning();
+	return created;
+}
 
 capacitySkillRoutes.post("/capacity/my-skills", ...gate, async (c) => {
 	const db = c.get("db");
@@ -194,7 +235,8 @@ capacitySkillRoutes.post("/capacity/my-skills", ...gate, async (c) => {
 	const evidence = cleanText(body.evidence, { multiline: true });
 	if (!LEVELS.includes(level)) return jsonError(c, 400, "INVALID_LEVEL", "Choose a level.");
 	if (evidence.length < 1 || evidence.length > 2000) return jsonError(c, 400, "EVIDENCE_REQUIRED", "Say what shows this.");
-	const [skill] = await db.select().from(capacitySkills).where(and(eq(capacitySkills.id, Number(body.skillId)), eq(capacitySkills.organizationId, organizationId), eq(capacitySkills.retired, false)));
+	const skill = await skillToNominate(db, organizationId, userId, body);
+	if (skill === "TOO_MANY") return jsonError(c, 429, "TOO_MANY_SKILLS", "You've added a lot of new skills. Ask an admin to tidy the list.");
 	if (!skill) return jsonError(c, 400, "INVALID_SKILL", "Choose a skill from the list.");
 	const pending = { pendingLevel: level, evidence, nominatedAt: new Date(), feedback: null };
 	await db
@@ -202,6 +244,59 @@ capacitySkillRoutes.post("/capacity/my-skills", ...gate, async (c) => {
 		.values({ ...pending, organizationId, userId, skillId: skill.id })
 		.onConflictDoUpdate({ target: [capacityUserSkills.userId, capacityUserSkills.skillId], set: pending });
 	return c.json({ ok: true }, 201);
+});
+
+// Editing a verified skill asks for a new assessment, and the verified level stays until then.
+capacitySkillRoutes.patch("/capacity/my-skills/:id", ...gate, async (c) => {
+	const db = c.get("db");
+	const organizationId = c.get("org").organizationId;
+	const userId = c.get("user").id;
+	const [found] = await db
+		.select({ row: capacityUserSkills, skill: capacitySkills })
+		.from(capacityUserSkills)
+		.innerJoin(capacitySkills, eq(capacityUserSkills.skillId, capacitySkills.id))
+		.where(and(eq(capacityUserSkills.id, Number(c.req.param("id"))), eq(capacityUserSkills.userId, userId), eq(capacityUserSkills.organizationId, organizationId)));
+	if (!found) return jsonError(c, 404, "NOT_FOUND", "That skill doesn't exist.");
+	const body = await readJson(c.req.raw);
+	const level = Number(body.level);
+	const evidence = cleanText(body.evidence, { multiline: true });
+	if (!LEVELS.includes(level)) return jsonError(c, 400, "INVALID_LEVEL", "Choose a level.");
+	if (evidence.length < 1 || evidence.length > 2000) return jsonError(c, 400, "EVIDENCE_REQUIRED", "Say what shows this.");
+	const name = cleanText(body.name);
+	if (name && name !== found.skill.name) {
+		const everyone = await db.select({ userId: capacityUserSkills.userId }).from(capacityUserSkills).where(eq(capacityUserSkills.skillId, found.skill.id));
+		const mineAlone = found.skill.createdBy === userId && found.row.level === null && everyone.every((row) => row.userId === userId);
+		if (!mineAlone) return jsonError(c, 409, "CANT_RENAME", "This skill can't be renamed now.");
+		if (name.length > 120) return jsonError(c, 400, "INVALID_SKILL", "That name is too long.");
+		const taken = await db.select({ name: capacitySkills.name }).from(capacitySkills).where(eq(capacitySkills.organizationId, organizationId));
+		if (taken.some((skill) => skill.name.toLowerCase() === name.toLowerCase() && skill.name !== found.skill.name)) {
+			return jsonError(c, 409, "SKILL_EXISTS", "That skill is already on the list.");
+		}
+		await db.update(capacitySkills).set({ name }).where(eq(capacitySkills.id, found.skill.id));
+	}
+	await db.update(capacityUserSkills).set({ pendingLevel: level, evidence, nominatedAt: new Date(), feedback: null }).where(eq(capacityUserSkills.id, found.row.id));
+	return c.json({ ok: true });
+});
+
+capacitySkillRoutes.delete("/capacity/my-skills/:id", ...gate, async (c) => {
+	const db = c.get("db");
+	const organizationId = c.get("org").organizationId;
+	const userId = c.get("user").id;
+	const [found] = await db
+		.select({ row: capacityUserSkills, skill: capacitySkills })
+		.from(capacityUserSkills)
+		.innerJoin(capacitySkills, eq(capacityUserSkills.skillId, capacitySkills.id))
+		.where(and(eq(capacityUserSkills.id, Number(c.req.param("id"))), eq(capacityUserSkills.userId, userId), eq(capacityUserSkills.organizationId, organizationId)));
+	if (!found) return jsonError(c, 404, "NOT_FOUND", "That skill doesn't exist.");
+	await db.delete(capacityUserSkills).where(eq(capacityUserSkills.id, found.row.id));
+	await db.delete(capacityBadgeShares).where(and(eq(capacityBadgeShares.organizationId, organizationId), eq(capacityBadgeShares.userId, userId), eq(capacityBadgeShares.badgeKey, `competency:${found.row.id}`)));
+	// A skill they added and nobody else uses goes too, so typos don't stay on the list.
+	if (found.skill.createdBy === userId) {
+		const others = await db.select({ id: capacityUserSkills.id }).from(capacityUserSkills).where(eq(capacityUserSkills.skillId, found.skill.id)).limit(1);
+		if (others.length === 0) await db.delete(capacitySkills).where(eq(capacitySkills.id, found.skill.id));
+	}
+	if (found.row.level !== null) await audit(c, "skill_removed", String(found.row.id), { name: found.skill.name });
+	return c.json({ ok: true });
 });
 
 capacitySkillRoutes.put("/capacity/my-skills/:id/share", ...gate, async (c) => {
@@ -458,6 +553,7 @@ capacitySkillRoutes.get("/directory/me", ...directoryGate, async (c) => {
 	return c.json({
 		profile: profile ?? { listed: false, displayName: null, displayNameApproved: false, picture: "initials", showTitle: true, showTeam: false, bio: null },
 		rules,
+		isAdmin: c.get("org").role === "admin",
 		me: { name: routing.byId.get(userId)?.name ?? "", position: me?.position ?? null, team: team?.name ?? null, photoUrl: memberPhotoUrl(userId, me?.photoKey ?? null) },
 	});
 });

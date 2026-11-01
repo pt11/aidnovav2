@@ -15,6 +15,7 @@ import {
 	Segmented,
 	StatePanel,
 	TextareaField,
+	useToast,
 } from "../ui";
 import {
 	dateRange,
@@ -31,7 +32,7 @@ import {
 	type RecordDetail,
 	type ReviewStatus,
 	type TrainingStatus,
-} from "./Capacity";
+	useCapacityMe } from "./Capacity";
 import { SkillCatalogTab } from "./CapacitySkills";
 import { DirectoryRulesTab } from "./Directory";
 
@@ -61,6 +62,7 @@ function inTab(item: QueueItem, tab: Tab) {
 
 function ReviewPane({ id, onDecided, onBack }: { id: number; onDecided: () => void; onBack: () => void }) {
 	const { t, language } = useI18n();
+	const toast = useToast();
 	const refresh = useRefreshCapacity();
 	const queryClient = useQueryClient();
 	const [decision, setDecision] = useState<"verify" | "changes" | "reject">("verify");
@@ -94,6 +96,7 @@ function ReviewPane({ id, onDecided, onBack }: { id: number; onDecided: () => vo
 			}),
 		onSuccess: async () => {
 			await refresh();
+			toast.success(t("cb.toast_decided"), t("cb.toast_decided_desc"));
 			onDecided();
 		},
 		onError: () => refresh(),
@@ -255,6 +258,7 @@ function ReviewPane({ id, onDecided, onBack }: { id: number; onDecided: () => vo
 }
 
 export function CapacityReviewsPage() {
+	const capacityMe = useCapacityMe();
 	const { t } = useI18n();
 	const [tab, setTab] = useState<Tab>("to_review");
 	const [selected, setSelected] = useState<number | null>(null);
@@ -272,10 +276,13 @@ export function CapacityReviewsPage() {
 	return (
 		<div className="flex flex-col gap-4 p-4 md:px-6 md:py-7">
 			<PageHeader title={t("cb.reviews")} subtitle={t("cb.reviews_desc")} />
+			{!!capacityMe.data?.assessCount && (
+				<Alert tone="info" title={t("cb.skills_waiting", { count: capacityMe.data.assessCount })} actions={<Link href="/capacity/skills" className={buttonClass("outline", "min-h-8 px-3 py-0")}>{t("cb.assess_now")}</Link>} />
+			)}
 			{items.length === 0 ? (
 				<StatePanel icon={ClipboardCheck} title={t("cb.reviews_empty")} description={t("cb.reviews_empty_desc")} />
 			) : (
-				<div className="grid items-start gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+				<div className="grid items-start gap-4 lg:grid-cols-[372px_minmax(0,1fr)]">
 					<div className={`flex min-w-0 flex-col gap-2.5 rounded-card border border-border bg-card p-2.5 ${selected !== null ? "max-lg:hidden" : ""}`}>
 						<Segmented
 							label={t("cb.reviews")}
@@ -314,7 +321,7 @@ export function CapacityReviewsPage() {
 												</span>
 											</span>
 											<span className={`text-xs ${days > LATE_DAYS ? "font-semibold text-danger-foreground" : "text-muted-foreground"}`}>
-												{item.tab === "to_review" && t("cb.waiting_days", { days })}
+												{item.tab === "to_review" && (days === 0 ? t("cb.waiting_today") : days === 1 ? t("cb.waiting_one") : t("cb.waiting_days", { days }))}
 												{item.tab === "to_review" && item.evidenceCount === 0 && item.trainingStatus === "completed" && ` · ${t("cb.no_evidence_short")}`}
 												{item.tab === "to_review" && item.version > 1 && ` · ${t("cb.resubmitted")}`}
 											</span>
@@ -410,6 +417,7 @@ const AUDIT_KEYS: Record<string, string> = {
 	"capacity.skill_added": "cb.audit_skill",
 	"capacity.skill_changed": "cb.audit_skill",
 	"capacity.skill_assessed": "cb.audit_assessed",
+	"capacity.skill_removed": "cb.audit_skill_removed",
 	"capacity.skill_declined": "cb.audit_assessed",
 	"capacity.directory_rules_changed": "cb.audit_directory",
 	"capacity.display_name_approved": "cb.audit_display",

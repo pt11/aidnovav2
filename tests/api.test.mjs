@@ -3561,6 +3561,8 @@ describe("skills, team overview and directory", () => {
 	});
 
 	test("a display name needs approval, and changing it asks again", async () => {
+		assert.equal((await staff.request("/api/directory/me")).data.isAdmin, false);
+		assert.equal((await admin.request("/api/directory/me")).data.isAdmin, true);
 		const pending = await profile(staff, { listed: true, displayName: "River" });
 		assert.equal(pending.data.displayNamePending, true);
 		assert.deepEqual((await directory(colleague)).cards, [], "not listed at all while it waits, not even under the real name");
@@ -3662,5 +3664,143 @@ describe("assistant and the guides", () => {
 		const stream = await ask("How do I change someone's role?", true);
 		const final = stream.text.trim().split("\n").map((line) => JSON.parse(line)).at(-1);
 		assert.ok(final.sources.guides.some((guide) => guide.path.endsWith("/roles")), JSON.stringify(final.sources.guides));
+	});
+});
+
+describe("my tasks", () => {
+	let platform, admin, lead, staff, orgId, dept, projectId;
+	const tasks = async (client) => (await client.request("/api/my-tasks")).data.tasks;
+	const kinds = (list) => list.map((task) => task.kind);
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("taskplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("taskadmin");
+		lead = await new Client().signUpAndIn("tasklead");
+		staff = await new Client().signUpAndIn("taskstaff");
+		orgId = (await admin.createOrg("taskorg")).data.id;
+		dept = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Field" } })).data.id;
+		addMember(lead.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${dept} WHERE organization_id = ${orgId} AND user_id = '${staff.userId}'`);
+	});
+
+	test("nothing shows for a module that's off", async () => {
+		assert.deepEqual(await tasks(staff), []);
+	});
+
+	test("each person gets their own next step, and it clears when done", async () => {
+		for (const key of ["projects", "capacity_building", "people_directory"]) {
+			await platform.request(`/api/superadmin/modules/${key}`, { method: "PATCH", body: { release: "pilot", paused: false } });
+			await admin.request(`/api/organizations/current/modules/${key}/review`, { method: "POST", body: { date: "2026-10-02", note: "Local" } });
+			await admin.request(`/api/organizations/current/modules/${key}/enable`, { method: "POST" });
+		}
+		await admin.request(`/api/capacity/reviewers/${dept}`, { method: "PUT", body: { reviewerId: lead.userId } });
+		const record = (await staff.request("/api/capacity/records", { method: "POST", body: { title: "PCM Secret", category: "meal", format: "online", startDate: "2026-01-01", endDate: "2026-01-02", durationValue: 2, durationUnit: "training_days", trainingStatus: "completed", objectives: "x" } })).data.id;
+		await staff.request(`/api/capacity/records/${record}/submit`, { method: "POST", body: {} });
+		const forLead = await tasks(lead);
+		assert.deepEqual(kinds(forLead), ["training_reviews"]);
+		assert.equal(forLead[0].count, 1);
+		assert.ok(!JSON.stringify(forLead).includes("PCM Secret"), "the to-do counts, it doesn't name people's training");
+		assert.deepEqual(await tasks(admin), [], "only the assigned reviewer");
+		await lead.request(`/api/capacity/reviews/${record}/decision`, { method: "POST", body: { decision: "changes", comment: "Add dates", version: 1 } });
+		const forStaff = await tasks(staff);
+		assert.deepEqual(kinds(forStaff), ["training_changes"]);
+		assert.equal(forStaff[0].href, `/capacity/records/${record}`);
+		assert.deepEqual(await tasks(lead), []);
+
+		const skillId = (await admin.request("/api/capacity/skills", { method: "POST", body: { name: "Survey" } })).data.id;
+		await staff.request("/api/capacity/my-skills", { method: "POST", body: { skillId, level: 3, evidence: "x" } });
+		assert.deepEqual(kinds(await tasks(lead)), ["skills_assess"]);
+		assert.equal((await lead.request("/api/capacity/me")).data.assessCount, 1);
+
+		projectId = (await admin.request("/api/projects", { method: "POST", body: { name: "Water", code: `TASK-${Date.now().toString(36).toUpperCase()}`, status: "in_progress", visibility: "organization", members: [{ userId: staff.userId, role: "member" }] } })).data.id;
+		const report = (await staff.request(`/api/projects/${projectId}/reports`, { method: "POST", body: { type: "form", period: "2026-09", activities: "x" } })).data.id;
+		await staff.request(`/api/projects/${projectId}/reports/${report}/submit`, { method: "POST", body: {} });
+		const review = (await tasks(admin)).find((task) => task.kind === "report_review");
+		assert.equal(review.count, 1);
+		assert.equal(review.href, `/projects/${projectId}?tab=reports`);
+		await admin.request(`/api/projects/${projectId}/reports/${report}/decision`, { method: "POST", body: { decision: "revise", comment: "More detail" } });
+		const revise = (await tasks(staff)).find((task) => task.kind === "report_revise");
+		assert.equal(revise.period, "2026-09");
+		assert.ok(!(await tasks(admin)).some((task) => task.kind === "report_review"));
+
+		await staff.request("/api/directory/me", { method: "PUT", body: { listed: true, displayName: "River" } });
+		assert.ok((await tasks(admin)).some((task) => task.kind === "display_names"));
+		assert.ok(!(await tasks(lead)).some((task) => task.kind === "display_names"), "only admins approve names");
+	});
+});
+
+describe("adding, editing and removing my skills", () => {
+	let platform, admin, lead, staff, other, orgId, dept;
+	const add = (client, body) => client.request("/api/capacity/my-skills", { method: "POST", body: { level: 2, evidence: "Did it", ...body } });
+	const mine = async (client) => (await client.request("/api/capacity/my-skills")).data.skills;
+	const catalog = async (client) => (await client.request("/api/capacity/skills")).data.skills;
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("msplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("msadmin");
+		lead = await new Client().signUpAndIn("mslead");
+		staff = await new Client().signUpAndIn("msstaff");
+		other = await new Client().signUpAndIn("msother");
+		orgId = (await admin.createOrg("msorg")).data.id;
+		dept = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Field" } })).data.id;
+		addMember(lead.userId, orgId, "manager");
+		for (const client of [staff, other]) addMember(client.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${dept} WHERE organization_id = ${orgId} AND user_id IN ('${staff.userId}', '${other.userId}')`);
+		await platform.request("/api/superadmin/modules/capacity_building", { method: "PATCH", body: { release: "pilot", paused: false } });
+		await admin.request("/api/organizations/current/modules/capacity_building/review", { method: "POST", body: { date: "2026-10-02", note: "Local" } });
+		await admin.request("/api/organizations/current/modules/capacity_building/enable", { method: "POST" });
+		await admin.request(`/api/capacity/reviewers/${dept}`, { method: "PUT", body: { reviewerId: lead.userId } });
+	});
+
+	test("anyone can add a skill while nominating, and the same name isn't added twice", async () => {
+		assert.equal((await add(staff, { newSkillName: "Beekeeping", newSkillCategory: "community" })).status, 201);
+		const added = (await catalog(admin)).find((skill) => skill.name === "Beekeeping");
+		assert.equal(added.category, "community");
+		assert.ok(added.addedBy);
+		assert.equal((await add(other, { newSkillName: "  beekeeping " })).status, 201);
+		assert.equal((await catalog(admin)).filter((skill) => skill.name.toLowerCase() === "beekeeping").length, 1);
+		assert.equal((await mine(staff))[0].level, null, "adding a skill never sets a level");
+		assert.equal((await add(staff, { newSkillName: "x".repeat(121) })).data.code, "INVALID_SKILL");
+	});
+
+	test("a skill can be renamed only while it's yours alone and unassessed", async () => {
+		const [row] = await mine(staff);
+		assert.equal(row.canRename, false, "someone else nominated it too");
+		assert.equal((await staff.request(`/api/capacity/my-skills/${row.id}`, { method: "PATCH", body: { name: "Bees", level: 3, evidence: "More" } })).data.code, "CANT_RENAME");
+		await add(staff, { newSkillName: "Typo skil" });
+		const typo = (await mine(staff)).find((skill) => skill.name === "Typo skil");
+		assert.equal(typo.canRename, true);
+		assert.equal((await staff.request(`/api/capacity/my-skills/${typo.id}`, { method: "PATCH", body: { name: "Beekeeping", level: 3, evidence: "x" } })).data.code, "SKILL_EXISTS");
+		assert.equal((await staff.request(`/api/capacity/my-skills/${typo.id}`, { method: "PATCH", body: { name: "Typo skill", level: 3, evidence: "Better" } })).status, 200);
+		const fixed = (await mine(staff)).find((skill) => skill.id === typo.id);
+		assert.deepEqual([fixed.name, fixed.pendingLevel, fixed.evidence], ["Typo skill", 3, "Better"]);
+		assert.equal((await other.request(`/api/capacity/my-skills/${typo.id}`, { method: "PATCH", body: { level: 1, evidence: "x" } })).status, 404, "only your own");
+	});
+
+	test("editing a verified skill keeps the level until it's assessed again", async () => {
+		const row = (await mine(staff)).find((skill) => skill.name === "Beekeeping");
+		await lead.request(`/api/capacity/assessments/${row.id}`, { method: "POST", body: { level: 3 } });
+		assert.equal((await staff.request(`/api/capacity/my-skills/${row.id}`, { method: "PATCH", body: { name: "Bees", level: 4, evidence: "New" } })).data.code, "CANT_RENAME");
+		await staff.request(`/api/capacity/my-skills/${row.id}`, { method: "PATCH", body: { level: 4, evidence: "New" } });
+		const after = (await mine(staff)).find((skill) => skill.id === row.id);
+		assert.deepEqual([after.level, after.pendingLevel], [3, 4]);
+	});
+
+	test("removing clears the queue, the badge and a lone typo", async () => {
+		const typo = (await mine(staff)).find((skill) => skill.name === "Typo skill");
+		assert.ok((await lead.request("/api/capacity/assessments")).data.assessments.some((item) => item.id === typo.id));
+		assert.equal((await other.request(`/api/capacity/my-skills/${typo.id}`, { method: "DELETE" })).status, 404);
+		assert.equal((await staff.request(`/api/capacity/my-skills/${typo.id}`, { method: "DELETE" })).status, 200);
+		assert.ok(!(await lead.request("/api/capacity/assessments")).data.assessments.some((item) => item.id === typo.id));
+		assert.ok(!(await catalog(admin)).some((skill) => skill.name === "Typo skill"), "nobody else used it");
+		const bees = (await mine(staff)).find((skill) => skill.name === "Beekeeping");
+		const key = `competency:${bees.id}`;
+		await staff.request("/api/capacity/my-badges/share", { method: "PUT", body: { key, shared: true } });
+		await staff.request(`/api/capacity/my-skills/${bees.id}`, { method: "DELETE" });
+		assert.ok(!(await staff.request("/api/capacity/my-skills")).data.badges.some((badge) => badge.key === key));
+		assert.ok((await catalog(admin)).some((skill) => skill.name === "Beekeeping"), "someone else still has it");
 	});
 });

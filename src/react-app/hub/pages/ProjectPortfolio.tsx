@@ -71,7 +71,7 @@ export function ProjectPortfolioPage() {
 		queryKey: ["projects-portfolio"],
 		queryFn: () => api<{ projects: Row[]; upcoming: Upcoming[] }>("/projects/portfolio"),
 	});
-	if (portfolio.isPending) return <PageLoading />;
+	if (portfolio.isPending) return <PageLoading variant="dashboard" />;
 	if (portfolio.isError) return <PageError onRetry={() => portfolio.refetch()} />;
 	const rows = portfolio.data.projects.filter((project) => category === "all" || project.category === category);
 	const active = rows.filter((project) => ["planned", "in_progress", "on_hold"].includes(project.status));
@@ -132,7 +132,7 @@ export function ProjectPortfolioPage() {
 				<StatePanel icon={FolderKanban} title={t("pr.portfolio_empty")} description={t("pr.portfolio_empty_desc")} />
 			) : (
 				<>
-					<dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+					<dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
 						<Tile label={t("pr.tile_active")} value={active.length} note={t("pr.tile_active_note", { progress: statusCount("in_progress"), planned: statusCount("planned"), hold: statusCount("on_hold") })} />
 						<Tile label={t("pr.tile_risk")} value={atRisk.length} note={atRisk.map((project) => project.name).join(", ") || t("pr.none_at_risk")} danger={atRisk.length > 0} />
 						<Tile label={t("pr.tile_completed")} value={completed.length} note={t("pr.tile_completed_note")} />

@@ -185,7 +185,7 @@ function CompliancePanel({ policy }: { policy: Policy }) {
 		onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
 	});
 
-	if (compliance.isPending) return <PageLoading />;
+	if (compliance.isPending) return <PageLoading variant="detail" />;
 	if (compliance.isError) return <PageError onRetry={() => compliance.refetch()} />;
 
 	const people = compliance.data;
@@ -327,7 +327,7 @@ export function PolicyDetailPage({
 		},
 	});
 
-	if (policy.isPending) return <PageLoading />;
+	if (policy.isPending) return <PageLoading variant="detail" />;
 	if (policy.isError) {
 		if (policy.error instanceof ApiError && policy.error.status === 404) {
 			return (

@@ -208,3 +208,113 @@ select:not(:disabled) {
 		font-size: 16px !important;
 	}
 }
+
+/* Waits a moment before showing, so a fast load doesn't flash. */
+.skeleton {
+	background: var(--input);
+	opacity: 0;
+	animation: skeleton-in 0.2s 0.12s forwards, skeleton-pulse 1.4s 0.32s ease-in-out infinite;
+}
+
+@keyframes skeleton-in {
+	to {
+		opacity: 0.75;
+	}
+}
+
+@keyframes skeleton-pulse {
+	0%,
+	100% {
+		opacity: 0.75;
+	}
+	50% {
+		opacity: 0.4;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.skeleton {
+		opacity: 0.6;
+		animation: none;
+	}
+}
+
+/* Alerts: tones are chosen by meaning, and each has its own icon so it reads without colour. */
+.tone-info { --tone-bg: #eef4ff; --tone-border: #b9cff3; --tone-title: #0052c4; --tone-icon: #0066f5; --tone-solid: #0066f5; --tone-solid-text: #fff; }
+.tone-success { --tone-bg: #e9f6f1; --tone-border: #a7dcc8; --tone-title: #0e5c43; --tone-icon: #17835f; --tone-solid: #e9f6f1; --tone-solid-text: #0e5c43; }
+.tone-warning { --tone-bg: #fef6e7; --tone-border: #f7d59a; --tone-title: #7a4b00; --tone-icon: #b87400; --tone-solid: #fef6e7; --tone-solid-text: #7a4b00; }
+.tone-error { --tone-bg: #fdecec; --tone-border: #f3b5b5; --tone-title: #a11b1b; --tone-icon: #dc2828; --tone-solid: #dc2828; --tone-solid-text: #fff; }
+.tone-neutral { --tone-bg: #f1f2f4; --tone-border: #dadce2; --tone-title: #030711; --tone-icon: #666d7a; --tone-solid: #f1f2f4; --tone-solid-text: #030711; }
+.tone-ai { --tone-bg: #f3eefe; --tone-border: #d3c2fb; --tone-title: #5426c4; --tone-icon: #753ff3; --tone-solid: #753ff3; --tone-solid-text: #fff; }
+
+:root { --alert-body: #3c4250; }
+.dark { --alert-body: #c9d2e0; }
+.dark .tone-info { --tone-bg: #14213d; --tone-border: #2b4a86; --tone-title: #9ebfff; --tone-icon: #9ebfff; }
+.dark .tone-success { --tone-bg: #12291f; --tone-border: #235c45; --tone-title: #7fd4b3; --tone-icon: #7fd4b3; --tone-solid: #12291f; --tone-solid-text: #7fd4b3; }
+.dark .tone-warning { --tone-bg: #2e2412; --tone-border: #6b4e14; --tone-title: #f8c46b; --tone-icon: #f8c46b; --tone-solid: #2e2412; --tone-solid-text: #f8c46b; }
+.dark .tone-error { --tone-bg: #2f1618; --tone-border: #6e2a2e; --tone-title: #f59a9a; --tone-icon: #f59a9a; }
+.dark .tone-neutral { --tone-bg: #1b1f27; --tone-border: #3a404b; --tone-title: #f3f4f7; --tone-icon: #8996a9; --tone-solid: #1b1f27; --tone-solid-text: #f3f4f7; }
+.dark .tone-ai { --tone-bg: #211a3d; --tone-border: #4b3a86; --tone-title: #c9b6fc; --tone-icon: #c9b6fc; }
+
+.toast-timer {
+	transform-origin: left;
+	animation: toast-timer 5s linear forwards;
+}
+
+.toast:hover .toast-timer,
+.toast:focus-within .toast-timer {
+	animation-play-state: paused;
+}
+
+@keyframes toast-timer {
+	to {
+		transform: scaleX(0);
+	}
+}
+
+/* The animation still times the toast. It just can't be seen moving. */
+@media (prefers-reduced-motion: reduce) {
+	.toast-timer {
+		visibility: hidden;
+	}
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"],
+select[aria-invalid="true"] {
+	border-color: var(--destructive);
+	box-shadow: 0 0 0 3px var(--danger-surface);
+}
+
+/* On phones each row becomes a small block, so nothing has to scroll sideways. */
+@media (max-width: 767px) {
+	.stack-table,
+	.stack-table tbody,
+	.stack-table tr,
+	.stack-table td {
+		display: block;
+	}
+
+	.stack-table thead {
+		display: none;
+	}
+
+	.stack-table tr {
+		padding: 10px 16px;
+	}
+
+	.stack-table td {
+		padding: 2px 0 !important;
+	}
+
+	.stack-table td[data-label]::before {
+		content: attr(data-label) ": ";
+		color: var(--muted-foreground);
+	}
+
+	.stack-table td[data-label] {
+		display: inline-block;
+		margin-right: 14px;
+		font-size: 12px;
+	}
+}

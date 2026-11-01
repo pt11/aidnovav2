@@ -226,7 +226,7 @@ function BuildDialog({ projectId, initialFileId, onClose }: { projectId: number;
 				</SelectField>
 				{files.isSuccess && csvFiles.length === 0 && <p className="text-[13px] text-muted-foreground">{t("pr.no_csv")}</p>}
 				{table.isError && <Alert>{t(ERRORS[tableCode] ?? "error.generic")}</Alert>}
-				{table.isFetching && <PageLoading />}
+				{table.isFetching && <PageLoading variant="inline" />}
 				{data && (
 					<>
 						<section>
@@ -312,7 +312,7 @@ export function ProjectDashboardTab({ projectId }: { projectId: number }) {
 		mutationFn: (id: number) => api(`/projects/${projectId}/widgets/${id}`, { method: "DELETE" }),
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: ["project-widgets", projectId] }),
 	});
-	if (widgets.isPending) return <PageLoading />;
+	if (widgets.isPending) return <PageLoading variant="inline" />;
 	if (widgets.isError) return <PageError onRetry={() => widgets.refetch()} />;
 	const { widgets: list, canManage } = widgets.data;
 	const stale = list.find((widget) => widget.stale);

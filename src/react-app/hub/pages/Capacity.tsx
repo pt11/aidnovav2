@@ -80,6 +80,7 @@ export interface RecordDetail {
 }
 
 export interface CapacityMe {
+	assessCount: number;
 	reviewers: string[];
 	inDepartment: boolean;
 	canReview: boolean;

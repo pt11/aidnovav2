@@ -387,7 +387,7 @@ function PdfViewer({
 					</p>
 				) : (
 					<>
-						{!pdf && <PageLoading />}
+						{!pdf && <PageLoading variant="inline" />}
 						<canvas ref={canvas} aria-label={t("course.page_of", { page, total })} className={pdf ? "mx-auto block bg-white" : "hidden"} />
 					</>
 				)}

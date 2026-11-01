@@ -560,7 +560,7 @@ export function CalendarPage({ canManage }: { canManage: boolean }) {
 				))}
 			</ul>
 
-			{events.isPending && <PageLoading />}
+			{events.isPending && <PageLoading variant="inline" />}
 			{events.isError && <PageError onRetry={() => events.refetch()} />}
 			{events.data && (
 				<div className="flex flex-wrap items-start gap-4">
