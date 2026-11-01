@@ -1,10 +1,10 @@
-import { Component, useEffect, type ReactNode } from "react";
+import { Component, useEffect, type ReactNode, lazy, Suspense } from "react";
 import {
 	QueryClient,
 	QueryClientProvider,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { CircleAlert, Hammer, Lock, SearchX } from "lucide-react";
+import { CircleAlert, Lock, SearchX } from "lucide-react";
 import { Redirect, Route, Switch, useLocation } from "wouter";
 import { api, authClient, useMe, type Me, type Membership } from "./api";
 import "./hub.css";
@@ -15,56 +15,62 @@ import {
 	SignInPage,
 	SignUpPage,
 } from "./pages/auth";
-import { AnnouncementsPage } from "./pages/Announcements";
-import { MyTrainingPage, ReportTrainingPage, TrainingDetailPage } from "./pages/Capacity";
-import { CapacityReviewsPage, CapacitySettingsPage } from "./pages/CapacityReview";
-import { CapacitySkillsPage, CapacityTeamPage } from "./pages/CapacitySkills";
-import { CapacityTrainingReportPage } from "./pages/CapacityTrainingReport";
-import { DirectoryPage, DirectoryPrivacyPage, DirectoryRulesPage } from "./pages/Directory";
-import { CreateOrganizationPage } from "./pages/CreateOrganization";
-import { DashboardPage } from "./pages/Dashboard";
-import { FilesPage } from "./pages/Files";
-import { HubPage } from "./pages/Hub";
-import { InvitePage } from "./pages/Invite";
-import { PoliciesPage } from "./pages/Policies";
-import { PolicyDetailPage } from "./pages/PolicyDetail";
-import { PolicyEditorPage } from "./pages/PolicyEditor";
-import { ProjectDetailPage } from "./pages/ProjectDetail";
-import { ProjectPortfolioPage } from "./pages/ProjectPortfolio";
-import { ProjectsPage } from "./pages/Projects";
-import {
-	SettingsDepartmentsPage,
-	SettingsGeneralPage,
-	SettingsPlanPage,
-	SettingsProfilePage,
-	SettingsSecurityPage,
-	SettingsStaffSignInPage,
-} from "./pages/SettingsArea";
-import {
-	SuperModulesPage,
-	SuperOrganizationsPage,
-	SuperOverviewPage,
-	SuperPlansPage,
-	SuperStoragePage,
-	SuperUsersPage,
-} from "./pages/SuperAdmin";
-import { CourseBuilderPage, CourseLearnersPage } from "./pages/CourseBuilder";
-import {
-	CertificatePage,
-	CourseLessonPage,
-	CourseOverviewPage,
-	CourseQuizPage,
-} from "./pages/CourseLearn";
-import { CoursesPage } from "./pages/Courses";
-import { LessonEditorPage } from "./pages/LessonEditor";
-import { QuizBuilderPage } from "./pages/QuizBuilder";
-import { ReportsPage } from "./pages/Reports";
-import { UsersPage } from "./pages/Users";
-import { CalendarPage } from "./pages/Calendar";
-import { SettingsModulesPage } from "./pages/SettingsModules";
-import { UserProfilePage } from "./pages/UserProfile";
 import { canManage, WorkspaceShell } from "./Shell";
-import { buttonClass, StartupScreen, StatePanel , ToastProvider } from "./ui";
+import { buttonClass, StartupScreen, StatePanel , ToastProvider, PageLoading } from "./ui";
+import { NotificationsPage } from "./pages/Notifications";
+
+// Each page downloads when it's first opened, so the app starts fast on a slow connection.
+const AnnouncementsPage = lazy(() => import("./pages/Announcements").then((page) => ({ default: page.AnnouncementsPage })));
+const MyTrainingPage = lazy(() => import("./pages/Capacity").then((page) => ({ default: page.MyTrainingPage })));
+const ReportTrainingPage = lazy(() => import("./pages/Capacity").then((page) => ({ default: page.ReportTrainingPage })));
+const TrainingDetailPage = lazy(() => import("./pages/Capacity").then((page) => ({ default: page.TrainingDetailPage })));
+const CapacityReviewsPage = lazy(() => import("./pages/CapacityReview").then((page) => ({ default: page.CapacityReviewsPage })));
+const CapacitySettingsPage = lazy(() => import("./pages/CapacityReview").then((page) => ({ default: page.CapacitySettingsPage })));
+const CapacitySkillsPage = lazy(() => import("./pages/CapacitySkills").then((page) => ({ default: page.CapacitySkillsPage })));
+const CapacityTeamPage = lazy(() => import("./pages/CapacitySkills").then((page) => ({ default: page.CapacityTeamPage })));
+const CapacityTrainingReportPage = lazy(() => import("./pages/CapacityTrainingReport").then((page) => ({ default: page.CapacityTrainingReportPage })));
+const DirectoryPage = lazy(() => import("./pages/Directory").then((page) => ({ default: page.DirectoryPage })));
+const DirectoryPrivacyPage = lazy(() => import("./pages/Directory").then((page) => ({ default: page.DirectoryPrivacyPage })));
+const DirectoryRulesPage = lazy(() => import("./pages/Directory").then((page) => ({ default: page.DirectoryRulesPage })));
+const CreateOrganizationPage = lazy(() => import("./pages/CreateOrganization").then((page) => ({ default: page.CreateOrganizationPage })));
+const DashboardPage = lazy(() => import("./pages/Dashboard").then((page) => ({ default: page.DashboardPage })));
+const FilesPage = lazy(() => import("./pages/Files").then((page) => ({ default: page.FilesPage })));
+const HubPage = lazy(() => import("./pages/Hub").then((page) => ({ default: page.HubPage })));
+const InvitePage = lazy(() => import("./pages/Invite").then((page) => ({ default: page.InvitePage })));
+const PoliciesPage = lazy(() => import("./pages/Policies").then((page) => ({ default: page.PoliciesPage })));
+const PolicyDetailPage = lazy(() => import("./pages/PolicyDetail").then((page) => ({ default: page.PolicyDetailPage })));
+const PolicyEditorPage = lazy(() => import("./pages/PolicyEditor").then((page) => ({ default: page.PolicyEditorPage })));
+const ProjectDetailPage = lazy(() => import("./pages/ProjectDetail").then((page) => ({ default: page.ProjectDetailPage })));
+const ProjectPortfolioPage = lazy(() => import("./pages/ProjectPortfolio").then((page) => ({ default: page.ProjectPortfolioPage })));
+const ProjectsPage = lazy(() => import("./pages/Projects").then((page) => ({ default: page.ProjectsPage })));
+const SettingsDepartmentsPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsDepartmentsPage })));
+const SettingsGeneralPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsGeneralPage })));
+const SettingsIntegrationsPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsIntegrationsPage })));
+const SettingsNotificationsPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsNotificationsPage })));
+const SettingsPlanPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsPlanPage })));
+const SettingsProfilePage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsProfilePage })));
+const SettingsSecurityPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsSecurityPage })));
+const SettingsStaffSignInPage = lazy(() => import("./pages/SettingsArea").then((page) => ({ default: page.SettingsStaffSignInPage })));
+const SuperModulesPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperModulesPage })));
+const SuperOrganizationsPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperOrganizationsPage })));
+const SuperOverviewPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperOverviewPage })));
+const SuperPlansPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperPlansPage })));
+const SuperStoragePage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperStoragePage })));
+const SuperUsersPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperUsersPage })));
+const CourseBuilderPage = lazy(() => import("./pages/CourseBuilder").then((page) => ({ default: page.CourseBuilderPage })));
+const CourseLearnersPage = lazy(() => import("./pages/CourseBuilder").then((page) => ({ default: page.CourseLearnersPage })));
+const CertificatePage = lazy(() => import("./pages/CourseLearn").then((page) => ({ default: page.CertificatePage })));
+const CourseLessonPage = lazy(() => import("./pages/CourseLearn").then((page) => ({ default: page.CourseLessonPage })));
+const CourseOverviewPage = lazy(() => import("./pages/CourseLearn").then((page) => ({ default: page.CourseOverviewPage })));
+const CourseQuizPage = lazy(() => import("./pages/CourseLearn").then((page) => ({ default: page.CourseQuizPage })));
+const CoursesPage = lazy(() => import("./pages/Courses").then((page) => ({ default: page.CoursesPage })));
+const LessonEditorPage = lazy(() => import("./pages/LessonEditor").then((page) => ({ default: page.LessonEditorPage })));
+const QuizBuilderPage = lazy(() => import("./pages/QuizBuilder").then((page) => ({ default: page.QuizBuilderPage })));
+const ReportsPage = lazy(() => import("./pages/Reports").then((page) => ({ default: page.ReportsPage })));
+const UsersPage = lazy(() => import("./pages/Users").then((page) => ({ default: page.UsersPage })));
+const CalendarPage = lazy(() => import("./pages/Calendar").then((page) => ({ default: page.CalendarPage })));
+const SettingsModulesPage = lazy(() => import("./pages/SettingsModules").then((page) => ({ default: page.SettingsModulesPage })));
+const UserProfilePage = lazy(() => import("./pages/UserProfile").then((page) => ({ default: page.UserProfilePage })));
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -117,21 +123,11 @@ class ErrorBoundary extends Component<
 	}
 }
 
-function LaterPage({ labelKey }: { labelKey: string }) {
-	const { t } = useI18n();
-	return (
-		<StatePanel
-			icon={Hammer}
-			title={t("page.later_title")}
-			description={t("page.later_desc", { page: t(labelKey) })}
-		/>
-	);
-}
-
 function NoAccessPage() {
 	const { t } = useI18n();
 	return (
 		<StatePanel
+			pageTitle
 			icon={Lock}
 			title={t("page.no_access_title")}
 			description={t("page.no_access_desc")}
@@ -143,6 +139,7 @@ function NotFoundPage() {
 	const { t } = useI18n();
 	return (
 		<StatePanel
+			pageTitle
 			icon={SearchX}
 			title={t("page.not_found_title")}
 			description={t("page.not_found_desc")}
@@ -221,7 +218,11 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 	const directoryOn = me.activeModules.includes("people_directory");
 	return (
 		<WorkspaceShell me={me} org={org}>
+			<Suspense fallback={<PageLoading />}>
 			<Switch>
+				<Route path="/announcements">
+					<Redirect to="/" replace />
+				</Route>
 				<Route path="/">
 					<AnnouncementsPage canManage={manager} />
 				</Route>
@@ -333,7 +334,13 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					{capacityOn ? <MyTrainingPage /> : <NoAccessPage />}
 				</Route>
 				<Route path="/notifications">
-					<LaterPage labelKey="shell.notifications" />
+					<NotificationsPage />
+				</Route>
+				<Route path="/settings/integrations">
+					{org.role === "admin" ? <SettingsIntegrationsPage org={org} email={me.user.email} /> : <NoAccessPage />}
+				</Route>
+				<Route path="/settings/notifications">
+					{org.role === "admin" ? <SettingsNotificationsPage org={org} /> : <NoAccessPage />}
 				</Route>
 				<Route path="/my-profile">
 					<Redirect to="/settings/profile" replace />
@@ -379,6 +386,7 @@ function Workspace({ me, org }: { me: Me; org: Membership }) {
 					<NotFoundPage />
 				</Route>
 			</Switch>
+			</Suspense>
 		</WorkspaceShell>
 	);
 }
@@ -483,7 +491,9 @@ export default function HubApp() {
 			<QueryClientProvider client={queryClient}>
 				<I18nProvider>
 					<ToastProvider>
-						<Gate />
+						<Suspense fallback={<StartupScreen />}>
+							<Gate />
+						</Suspense>
 					</ToastProvider>
 				</I18nProvider>
 			</QueryClientProvider>

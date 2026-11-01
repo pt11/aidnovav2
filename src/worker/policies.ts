@@ -24,6 +24,7 @@ import {
 } from "./middleware";
 import { getOrgLimits, getStorageUsed } from "./plans";
 import { cleanText, isSafeLink, readJson } from "./validate";
+import { notifyPeople } from "./notifications";
 
 const CATEGORIES = [
 	"Human Resources",
@@ -95,6 +96,11 @@ function audienceOf(members: Member[], accessIds: number[]) {
 					member.departmentId !== null &&
 					accessIds.includes(member.departmentId),
 			);
+}
+
+async function notifyPolicyAudience(c: Context<AppEnv>, id: number, title: string, accessIds: number[]) {
+	const members = await activeMembers(c.get("db"), c.get("org").organizationId);
+	await notifyPeople(c, audienceOf(members, accessIds).map((member) => member.userId), "policy_required", { title }, `/policies/${id}`);
 }
 
 function activeMembers(db: Db, organizationId: number): Promise<Member[]> {
@@ -589,6 +595,9 @@ policyRoutes.post(
 		} else {
 			await db.batch([publish, audit]);
 		}
+		if (input.values.status === "published" && input.values.isMandatory) {
+			await notifyPolicyAudience(c, created.id, input.values.title, input.departmentIds);
+		}
 		return c.json(created, 201);
 	},
 );
@@ -853,6 +862,11 @@ policyRoutes.patch(
 		} else {
 			await db.batch([clearAccess, update, audit]);
 		}
+		// Newly published, or reworded so that everyone has to acknowledge it again.
+		const becameLive = existing.status !== "published" || version !== existing.version;
+		if (input.values.status === "published" && input.values.isMandatory && becameLive) {
+			await notifyPolicyAudience(c, existing.id, input.values.title, input.departmentIds);
+		}
 		return c.json({ id: existing.id, version });
 	},
 );
@@ -1063,6 +1077,7 @@ policyRoutes.post(
 			return result.status === "fulfilled";
 		});
 		if (sent.length) {
+			await notifyPeople(c, sent.map((member) => member.userId), "policy_reminder", { title }, `/policies/${policy.id}`);
 			await db.insert(policyReminderLog).values(
 				sent.map((member) => ({
 					policyId: policy.id,

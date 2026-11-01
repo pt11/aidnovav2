@@ -264,7 +264,7 @@ function GuidePage({ guide, lang }: { guide: Guide; lang: GuideLang }) {
 	const copy = COPY[lang];
 	const blocks = guide.body[lang];
 	const headings = blocks.flatMap((block, index) => ("h" in block ? [{ id: `s${index}`, text: block.h }] : []));
-	const siblings = GUIDES;
+	const siblings = CATEGORIES.flatMap((item) => GUIDES.filter((other) => other.category === item.key));
 	const at = siblings.indexOf(guide);
 	const previous = siblings[at - 1];
 	const next = siblings[at + 1];

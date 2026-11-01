@@ -16,6 +16,7 @@ export interface Membership {
 	role: Role;
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
 	trialEndDate: string | null;
+	assistantEnabled: boolean;
 	access: OrgAccess;
 }
 

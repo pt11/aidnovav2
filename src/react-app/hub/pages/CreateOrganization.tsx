@@ -28,7 +28,11 @@ export function CreateOrganizationPage() {
 	const create = useMutation({
 		mutationFn: () =>
 			api("/organizations", { method: "POST", body: { name, slug } }),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+		// A new admin's first steps are on the Dashboard, not the empty announcements feed.
+		onSuccess: async () => {
+			window.history.replaceState({}, "", "/dashboard");
+			await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+		},
 	});
 
 	function submit(event: FormEvent) {

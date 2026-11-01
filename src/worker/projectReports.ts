@@ -8,6 +8,7 @@ import { jsonError, requireOrg, requireUser, type AppEnv } from "./middleware";
 import { requireModule } from "./modules";
 import { canEdit, contributes, expectedPeriods, isLead, loadPeople, loadVisible, record, PERIOD } from "./projects";
 import { cleanText, readJson } from "./validate";
+import { notifyPeople } from "./notifications";
 
 type Project = NonNullable<Awaited<ReturnType<typeof loadVisible>>>;
 type Report = typeof projectReports.$inferSelect;
@@ -213,6 +214,7 @@ projectReportRoutes.post("/projects/:id/reports/:reportId/submit", ...gate, asyn
 	const leads = people.filter((person) => person.isActive && isLead(project, person.userId) && person.userId !== c.get("user").id);
 	const reviewers = leads.length ? leads : people.filter((person) => person.isActive && person.role === "admin" && person.userId !== c.get("user").id);
 	notify(c, reviewers.map((person) => person.email), `A report is waiting for review: ${project.name}`, project.id);
+	await notifyPeople(c, reviewers.map((person) => person.userId), "report_waiting", { project: project.name, period: report.period ?? "", label: report.label ?? "" }, `/projects/${project.id}?tab=reports`);
 	return c.json({ ok: true });
 });
 
@@ -235,6 +237,7 @@ projectReportRoutes.post("/projects/:id/reports/:reportId/decision", ...gate, as
 		.set({ status, reviewComment: comment || null, reviewedBy: c.get("user").id, reviewedAt: new Date() })
 		.where(eq(projectReports.id, report.id));
 	await record(db, c, project.id, status === "approved" ? "report_approved" : "report_returned", report.label ?? report.period);
+	await notifyPeople(c, [report.createdBy], status === "approved" ? "report_approved" : "report_returned", { project: project.name, period: report.period ?? "", label: report.label ?? "" }, `/projects/${project.id}?tab=reports`);
 	const people = await loadPeople(db, project.organizationId);
 	notify(c, [people.find((person) => person.userId === report.createdBy)?.email], `Your report was reviewed: ${project.name}`, project.id);
 	return c.json({ ok: true });

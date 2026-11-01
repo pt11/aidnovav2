@@ -21,6 +21,7 @@ import {
 	StatePanel,
 	TextareaField,
 } from "../ui";
+import { CAPACITY_ME_KEY, useCapacityMe, type CapacityMe } from "./capacityMe";
 
 export type ReviewStatus = "draft" | "submitted" | "under_review" | "verified" | "changes_requested" | "rejected";
 export type TrainingStatus = "applied" | "started" | "in_progress" | "completed" | "cancelled";
@@ -79,17 +80,8 @@ export interface RecordDetail {
 	events: TrainingEvent[];
 }
 
-export interface CapacityMe {
-	assessCount: number;
-	reviewers: string[];
-	inDepartment: boolean;
-	canReview: boolean;
-	reviewCount: number;
-	isAdmin: boolean;
-	reportScopes: string[];
-}
-
-export const CAPACITY_ME_KEY = ["capacity-me"];
+export { CAPACITY_ME_KEY, useCapacityMe };
+export type { CapacityMe };
 const RECORDS_KEY = ["capacity-records"];
 const CATEGORIES = [
 	"leadership",
@@ -124,10 +116,6 @@ const REGIONS = [
 	"Outside Myanmar",
 ];
 const MAX_EVIDENCE_BYTES = 10 * 1024 * 1024;
-
-export function useCapacityMe() {
-	return useQuery({ queryKey: CAPACITY_ME_KEY, queryFn: () => api<CapacityMe>("/capacity/me") });
-}
 
 export function useRefreshCapacity() {
 	const queryClient = useQueryClient();

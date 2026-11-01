@@ -1,6 +1,6 @@
 import { and, count, eq, gt, sql } from "drizzle-orm";
 import { Hono } from "hono";
-import { getBaseUrl } from "./auth";
+import { createAuth, getBaseUrl } from "./auth";
 import type { Db } from "./db";
 import {
 	auditLog,
@@ -25,6 +25,7 @@ import {
 } from "./middleware";
 import { getOrgLimits, getSeatUsage } from "./plans";
 import { cleanText, isEmail, readJson } from "./validate";
+import { welcomeNotice } from "./notifications";
 
 const ROLES: Role[] = ["staff", "manager", "admin"];
 const INVITE_DAYS = 7;
@@ -536,6 +537,27 @@ team.delete(
 	},
 );
 
+// The invitation was emailed to this address, so holding it already proves the
+// address is theirs and there's nothing left to confirm. It only ever creates a new
+// account: an existing one, confirmed or not, has to sign in as usual.
+team.post("/invitations/sign-up", async (c) => {
+	const db = c.get("db");
+	const body = await readJson(c.req.raw);
+	const name = cleanText(body.name);
+	const password = typeof body.password === "string" ? body.password : "";
+	if (typeof body.token !== "string" || !body.token) return jsonError(c, 404, "NOT_FOUND", "That invitation doesn't exist.");
+	const [invite] = await db.select({ email: invitations.email, expiresAt: invitations.expiresAt }).from(invitations).where(eq(invitations.tokenHash, await hashToken(body.token)));
+	if (!invite) return jsonError(c, 404, "NOT_FOUND", "That invitation doesn't exist.");
+	if (invite.expiresAt < new Date()) return jsonError(c, 409, "INVITE_EXPIRED", "That invitation has expired.");
+	if (name.length < 1 || name.length > 255) return jsonError(c, 400, "INVALID_NAME", "Enter your name.");
+	if (password.length < 8 || password.length > 128) return jsonError(c, 400, "INVALID_PASSWORD", "Choose a password of at least 8 characters.");
+	const [existing] = await db.select({ id: user.id }).from(user).where(eq(user.email, invite.email));
+	if (existing) return jsonError(c, 409, "EMAIL_EXISTS", "An account with this email already exists.");
+	await createAuth(c.env, c.req.raw, { skipConfirmationEmail: true }).api.signUpEmail({ body: { name, email: invite.email, password } });
+	await db.update(user).set({ emailVerified: true }).where(eq(user.email, invite.email));
+	return c.json({ email: invite.email }, 201);
+});
+
 // Public, because invited people may not have an account yet. Only someone
 // holding the emailed token can read it.
 team.get("/invitations/lookup", async (c) => {
@@ -616,6 +638,8 @@ team.post("/invitations/accept", requireUser, async (c) => {
 		throw error;
 	}
 
+	const [joined] = await db.select({ name: organizations.name }).from(organizations).where(eq(organizations.id, invite.organizationId));
+	await welcomeNotice(db, invite.organizationId, currentUser.id, joined?.name ?? "");
 	setActiveOrgCookie(c, invite.organizationId);
 	return c.json({ organizationId: invite.organizationId });
 });

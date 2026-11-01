@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Award,
 	BarChart3,
-	Bell,
 	CalendarDays,
 	Check,
 	ChevronsUpDown,
@@ -35,8 +34,9 @@ import { Link, useLocation, useSearch } from "wouter";
 import { api, authClient, type Me, type Membership, type Role } from "./api";
 import { useI18n } from "./i18n";
 import { AskPanel } from "./AskPanel";
-import { useCapacityMe } from "./pages/Capacity";
+import { useCapacityMe } from "./pages/capacityMe";
 import { Avatar, LanguageSwitch, PageBanner } from "./ui";
+import { NotificationBell } from "./pages/Notifications";
 
 interface NavItem {
 	url: string;
@@ -697,13 +697,7 @@ export function Header({
 					{dark ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
 				</button>
 				{onOpenMenu && (
-					<Link
-						href="/notifications"
-						aria-label={t("shell.notifications")}
-						className={iconButton}
-					>
-						<Bell size={18} aria-hidden="true" />
-					</Link>
+					<NotificationBell className={iconButton} />
 				)}
 			</div>
 		</header>
@@ -901,12 +895,12 @@ export function WorkspaceShell({
 		const onKeyDown = (event: KeyboardEvent) => {
 			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
 				event.preventDefault();
-				setAskOpen((current) => !current);
+				if (org.assistantEnabled) setAskOpen((current) => !current);
 			} else if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
 				setAskOpen(false);
 			}
 		};
-		const openAsk = () => setAskOpen(true);
+		const openAsk = () => setAskOpen(org.assistantEnabled);
 		document.addEventListener("keydown", onKeyDown);
 		window.addEventListener("aidnova-ask", openAsk);
 		return () => {
@@ -969,7 +963,7 @@ export function WorkspaceShell({
 					<Header
 						onOpenMenu={() => setDrawerOpen(true)}
 						askOpen={askOpen}
-						onToggleAsk={() => setAskOpen((current) => !current)}
+						onToggleAsk={org.assistantEnabled ? () => setAskOpen((current) => !current) : undefined}
 						sidebarFolded={sidebarFolded}
 						onToggleSidebar={toggleSidebar}
 					/>
@@ -980,7 +974,7 @@ export function WorkspaceShell({
 			</div>
 
 			<AskPanel
-				open={askOpen}
+				open={askOpen && org.assistantEnabled}
 				expanded={askExpanded}
 				name={me.user.name}
 				onClose={() => setAskOpen(false)}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useDeferredValue, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { api, ApiError, authClient, type Me } from "../api";
 import {
@@ -225,10 +225,23 @@ function Layout({
 
 const PAGE_SIZE = 50;
 
-// Thousands of rows are heavy to draw and nobody reads them all. Searching still covers everything.
-function useShowMore<T>(rows: T[]) {
+interface OrganizationPage {
+	organizations: Organization[];
+	matching: number;
+	totals: { organizations: number; waiting: number; stored: number; files: number; nearLimit: number };
+}
+
+// The server filters and sends one page at a time, so these screens stay light
+// however many organizations there are.
+function useOrganizationPage(filters: Record<string, string>) {
 	const [limit, setLimit] = useState(PAGE_SIZE);
-	return { shown: rows.slice(0, limit), more: rows.length - limit, showMore: () => setLimit((current) => current + PAGE_SIZE) };
+	const params = new URLSearchParams({ ...filters, limit: String(limit) }).toString();
+	const query = useQuery({
+		queryKey: [...ORGS_KEY, params],
+		queryFn: () => api<OrganizationPage>(`/superadmin/organizations?${params}`),
+		placeholderData: keepPreviousData,
+	});
+	return { query, list: query.data?.organizations ?? [], more: (query.data?.matching ?? 0) - (query.data?.organizations.length ?? 0), showMore: () => setLimit((current) => current + PAGE_SIZE) };
 }
 
 function ShowMore({ more, onClick }: { more: number; onClick: () => void }) {
@@ -717,11 +730,6 @@ function OrganizationPanel({ org, plans, onClose }: { org: Organization; plans: 
 }
 
 export function SuperOrganizationsPage({ me }: { me: Me }) {
-	const organizations = useQuery({
-		queryKey: ORGS_KEY,
-		queryFn: () => api<{ organizations: Organization[] }>("/superadmin/organizations"),
-		select: (data) => data.organizations,
-	});
 	const plans = useQuery({
 		queryKey: PLANS_KEY,
 		queryFn: () => api<{ plans: Plan[] }>("/superadmin/plans"),
@@ -732,26 +740,19 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 	const [status, setStatus] = useState("all");
 	const [requestsOnly, setRequestsOnly] = useState(false);
 
-	const list = organizations.data ?? [];
-	const text = search.trim().toLowerCase();
-	const visible = list.filter(
-		(org) =>
-			(!text ||
-				org.name.toLowerCase().includes(text) ||
-				org.ownerEmail.toLowerCase().includes(text)) &&
-			(status === "all" || org.status === status) &&
-			(!requestsOnly || org.request),
-	);
-	const selected = list.find((org) => org.id === selectedId) ?? null;
-	const waiting = list.filter((org) => org.request).length;
-	const page = useShowMore(visible);
+	const deferredSearch = useDeferredValue(search.trim());
+	const page = useOrganizationPage({ q: deferredSearch, status, requests: requestsOnly ? "1" : "" });
+	const organizations = page.query;
+	const visible = page.list;
+	const selected = visible.find((org) => org.id === selectedId) ?? null;
+	const waiting = organizations.data?.totals.waiting ?? 0;
 	const closePanel = useCallback(() => setSelectedId(null), []);
 
 	return (
 		<Layout
 			me={me}
 			title="Organizations"
-			subtitle={`${plural(list.length, "organization")} · ${plural(waiting, "upgrade request")} waiting`}
+			subtitle={`${plural(organizations.data?.totals.organizations ?? 0, "organization")} · ${plural(waiting, "upgrade request")} waiting`}
 		>
 			{organizations.isPending && <PageLoading variant="inline" />}
 			{organizations.isError && <PageError onRetry={() => organizations.refetch()} />}
@@ -795,7 +796,7 @@ export function SuperOrganizationsPage({ me }: { me: Me }) {
 									</tr>
 								</thead>
 								<tbody>
-									{page.shown.map((org) => (
+									{visible.map((org) => (
 										<tr
 											key={org.id}
 											onClick={() => setSelectedId(org.id)}
@@ -867,8 +868,9 @@ export function SuperUsersPage({ me }: { me: Me }) {
 		const timer = window.setTimeout(() => setQuery(search.trim()), 300);
 		return () => window.clearTimeout(timer);
 	}, [search]);
+	const [limit, setLimit] = useState(PAGE_SIZE);
 	const users = useQuery({
-		queryKey: ["superadmin", "users", query],
+		queryKey: ["superadmin", "users", query, limit],
 		queryFn: () =>
 			api<{
 				totals: {
@@ -878,7 +880,9 @@ export function SuperUsersPage({ me }: { me: Me }) {
 					withoutOrganization: number;
 				};
 				users: PlatformUser[];
-			}>(`/superadmin/users?q=${encodeURIComponent(query)}`),
+				matching: number;
+			}>(`/superadmin/users?q=${encodeURIComponent(query)}&limit=${limit}`),
+		placeholderData: keepPreviousData,
 	});
 	const [resetting, setResetting] = useState<PlatformUser | null>(null);
 	const resetTwoStep = useMutation({
@@ -900,7 +904,7 @@ export function SuperUsersPage({ me }: { me: Me }) {
 			setChanging(null);
 		},
 	});
-	const page = useShowMore(users.data?.users ?? []);
+	const page = { shown: users.data?.users ?? [], more: (users.data?.matching ?? 0) - (users.data?.users.length ?? 0), showMore: () => setLimit((current) => current + PAGE_SIZE) };
 	return (
 		<Layout me={me} title="Users" subtitle="Everyone who has signed up, across all organizations">
 			{users.isError && <PageError onRetry={() => users.refetch()} />}
@@ -1736,18 +1740,13 @@ export function SuperModulesPage({ me }: { me: Me }) {
 }
 
 export function SuperStoragePage({ me }: { me: Me }) {
-	const organizations = useQuery({
-		queryKey: ORGS_KEY,
-		queryFn: () => api<{ organizations: Organization[] }>("/superadmin/organizations"),
-		select: (data) => data.organizations,
-	});
+	const page = useOrganizationPage({ sort: "storage" });
+	const organizations = page.query;
 	const percentOf = (org: Organization) =>
 		org.storageLimitBytes ? (org.storageUsed / org.storageLimitBytes) * 100 : 0;
-	const list = [...(organizations.data ?? [])].sort((a, b) => percentOf(b) - percentOf(a));
-	const total = list.reduce((sum, org) => sum + org.storageUsed, 0);
-	const files = list.reduce((sum, org) => sum + org.fileCount, 0);
-	const nearLimit = list.filter((org) => percentOf(org) >= 90).length;
-	const page = useShowMore(list);
+	const total = organizations.data?.totals.stored ?? 0;
+	const files = organizations.data?.totals.files ?? 0;
+	const nearLimit = organizations.data?.totals.nearLimit ?? 0;
 	return (
 		<Layout me={me} title="Storage" subtitle="File storage by organization, against each limit">
 			{organizations.isPending && <PageLoading variant="inline" />}
@@ -1757,7 +1756,7 @@ export function SuperStoragePage({ me }: { me: Me }) {
 					<dl className="grid gap-3 sm:grid-cols-3">
 						<StatCard label="Total stored" value={formatBytes(total)} detail={plural(files, "file")} />
 						<StatCard label="Over 90% of limit" value={nearLimit} detail={nearLimit === 1 ? "organization" : "organizations"} />
-						<StatCard label="Organizations" value={list.length} />
+						<StatCard label="Organizations" value={organizations.data?.totals.organizations ?? 0} />
 					</dl>
 					<section className="overflow-x-auto rounded-card border border-border bg-card">
 						<table className="stack-table w-full text-left text-[13px] md:min-w-[560px]">
@@ -1770,7 +1769,7 @@ export function SuperStoragePage({ me }: { me: Me }) {
 								</tr>
 							</thead>
 							<tbody>
-								{page.shown.map((org) => {
+								{page.list.map((org) => {
 									const percent = Math.min(100, Math.round(percentOf(org)));
 									return (
 										<tr key={org.id} className="border-t border-border">

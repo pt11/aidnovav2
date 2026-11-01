@@ -18,6 +18,7 @@ import {
 	SelectField,
 	StatePanel,
 	TextareaField,
+	Toggle,
 	useToast,
 } from "../ui";
 import { downloadCsv } from "../csv";
@@ -77,22 +78,6 @@ function LevelBars({ level, name }: { level: number; name: string }) {
 				{LEVELS.map((value) => <span key={value} className={`h-1 w-6 rounded-full ${value <= level ? "bg-primary" : "bg-input"}`} />)}
 			</span>
 		</span>
-	);
-}
-
-export function Toggle({ checked, label, disabled = false, onChange }: { checked: boolean; label: string; disabled?: boolean; onChange: (value: boolean) => void }) {
-	return (
-		<button
-			type="button"
-			role="switch"
-			aria-checked={checked}
-			aria-label={label}
-			disabled={disabled}
-			className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${checked ? "bg-primary" : "bg-input"}`}
-			onClick={() => onChange(!checked)}
-		>
-			<span className={`absolute top-0.5 size-4 rounded-full bg-white transition-all ${checked ? "left-[18px]" : "left-0.5"}`} />
-		</button>
 	);
 }
 

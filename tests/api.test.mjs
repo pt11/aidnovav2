@@ -3804,3 +3804,207 @@ describe("adding, editing and removing my skills", () => {
 		assert.ok((await catalog(admin)).some((skill) => skill.name === "Beekeeping"), "someone else still has it");
 	});
 });
+
+describe("notifications", () => {
+	let platform, admin, lead, staff, other, outsider, orgId, dept, policyId;
+	const inbox = async (client) => (await client.request("/api/notifications")).data;
+	const kinds = async (client) => (await inbox(client)).notifications.map((item) => item.kind);
+	const unread = async (client) => (await client.request("/api/notifications/unread-count")).data.unread;
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("noteplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("noteadmin");
+		lead = await new Client().signUpAndIn("notelead");
+		staff = await new Client().signUpAndIn("notestaff");
+		other = await new Client().signUpAndIn("noteother");
+		outsider = await new Client().signUpAndIn("noteout");
+		orgId = (await admin.createOrg("noteorg")).data.id;
+		await outsider.createOrg("noteorg2");
+		dept = (await admin.request("/api/organizations/current/departments", { method: "POST", body: { name: "Field" } })).data.id;
+		addMember(lead.userId, orgId, "manager");
+		addMember(staff.userId, orgId, "staff");
+		addMember(other.userId, orgId, "staff");
+		sql(`UPDATE user_profiles SET department_id = ${dept} WHERE organization_id = ${orgId} AND user_id = '${staff.userId}'`);
+	});
+
+	test("a mandatory policy reaches its audience, not its author or other departments", async () => {
+		const made = await admin.request("/api/policies", { method: "POST", body: { title: "Field Rules", category: "General", content: "Rules.", status: "published", isMandatory: true, departmentIds: [dept] } });
+		policyId = made.data.id;
+		assert.deepEqual(await kinds(staff), ["policy_required"]);
+		assert.deepEqual(await kinds(other), [], "another department isn't told");
+		assert.deepEqual(await kinds(admin), [], "nobody is told about their own action");
+		const [item] = (await inbox(staff)).notifications;
+		assert.equal(item.href, `/policies/${policyId}`);
+		assert.equal(item.params.title, "Field Rules");
+		assert.equal(item.read, false);
+		await admin.request("/api/policies", { method: "POST", body: { title: "Optional", category: "General", content: "x", status: "published", isMandatory: false } });
+		assert.equal((await kinds(staff)).length, 1, "an optional policy doesn't notify");
+	});
+
+	test("only your own can be read or deleted", async () => {
+		const [item] = (await inbox(staff)).notifications;
+		assert.equal((await other.request(`/api/notifications/${item.id}/read`, { method: "POST" })).status, 404);
+		assert.equal((await other.request(`/api/notifications/${item.id}`, { method: "DELETE" })).status, 404);
+		assert.equal((await outsider.request(`/api/notifications/${item.id}/read`, { method: "POST" })).status, 404);
+		assert.equal(await unread(staff), 1);
+		await staff.request(`/api/notifications/${item.id}/read`, { method: "POST" });
+		assert.equal(await unread(staff), 0);
+		assert.equal((await inbox(staff)).notifications[0].read, true);
+		assert.equal((await staff.request(`/api/notifications/${item.id}`, { method: "DELETE" })).status, 200);
+		assert.deepEqual(await kinds(staff), []);
+		assert.equal((await new Client().request("/api/notifications")).status, 401);
+	});
+
+	test("announcements and events reach everyone, and an admin can switch them off", async () => {
+		await lead.request("/api/announcements", { method: "POST", body: { title: "Closed", content: "Friday", priority: "urgent" } });
+		assert.ok((await kinds(admin)).includes("announcement_urgent"));
+		assert.ok((await kinds(other)).includes("announcement_urgent"));
+		assert.ok(!(await kinds(outsider)).includes("announcement_urgent"), "other organizations hear nothing");
+		assert.equal((await lead.request("/api/organizations/current/notification-settings")).status, 403);
+		const off = await admin.request("/api/organizations/current/notification-settings", { method: "PUT", body: { announcements: false, events: false } });
+		assert.equal(off.data.announcements, false);
+		assert.equal(off.data.policies, true);
+		const before = (await kinds(other)).length;
+		await lead.request("/api/announcements", { method: "POST", body: { title: "Quiet", content: "x", priority: "normal" } });
+		assert.equal((await kinds(other)).length, before);
+		await admin.request("/api/organizations/current/notification-settings", { method: "PUT", body: {} });
+		await lead.request("/api/announcements", { method: "POST", body: { title: "Back", content: "x", priority: "normal" } });
+		assert.equal((await kinds(other)).length, before + 1);
+		await other.request("/api/notifications/read-all", { method: "POST" });
+		assert.equal(await unread(other), 0);
+	});
+
+	test("training, skills, reports and display names tell the right person, and restricted training stays hidden", async () => {
+		for (const key of ["projects", "capacity_building", "people_directory"]) {
+			await platform.request(`/api/superadmin/modules/${key}`, { method: "PATCH", body: { release: "pilot", paused: false } });
+			await admin.request(`/api/organizations/current/modules/${key}/review`, { method: "POST", body: { date: "2026-10-02", note: "Local" } });
+			await admin.request(`/api/organizations/current/modules/${key}/enable`, { method: "POST" });
+		}
+		await admin.request(`/api/capacity/reviewers/${dept}`, { method: "PUT", body: { reviewerId: lead.userId } });
+		const record = (await staff.request("/api/capacity/records", { method: "POST", body: { title: "PSEA Secret", category: "safeguarding", format: "online", startDate: "2026-01-01", endDate: "2026-01-02", durationValue: 2, durationUnit: "training_days", trainingStatus: "completed", objectives: "x" } })).data.id;
+		await staff.request(`/api/capacity/records/${record}/submit`, { method: "POST", body: {} });
+		const waiting = (await inbox(lead)).notifications.find((item) => item.kind === "training_waiting");
+		assert.ok(waiting);
+		assert.ok(!JSON.stringify(await inbox(lead)).includes("PSEA Secret"), "a reviewer's notice doesn't name restricted training");
+		await lead.request(`/api/capacity/reviews/${record}/decision`, { method: "POST", body: { decision: "changes", comment: "Dates", version: 1 } });
+		const decided = (await inbox(staff)).notifications.find((item) => item.kind === "training_changes");
+		assert.equal(decided.params.title, "PSEA Secret", "the owner's own notice can");
+		assert.equal(decided.href, `/capacity/records/${record}`);
+		const skillId = (await admin.request("/api/capacity/skills", { method: "POST", body: { name: "Survey" } })).data.id;
+		await staff.request("/api/capacity/my-skills", { method: "POST", body: { skillId, level: 3, evidence: "x" } });
+		assert.ok((await kinds(lead)).includes("skill_nominated"));
+		const row = (await staff.request("/api/capacity/my-skills")).data.skills[0];
+		await lead.request(`/api/capacity/assessments/${row.id}`, { method: "POST", body: { level: 3 } });
+		assert.ok((await kinds(staff)).includes("skill_assessed"));
+		const project = (await admin.request("/api/projects", { method: "POST", body: { name: "Water", code: `NOTE-${Date.now().toString(36).toUpperCase()}`, status: "in_progress", visibility: "organization", members: [{ userId: staff.userId, role: "member" }] } })).data.id;
+		const report = (await staff.request(`/api/projects/${project}/reports`, { method: "POST", body: { type: "form", period: "2026-09", activities: "x" } })).data.id;
+		await staff.request(`/api/projects/${project}/reports/${report}/submit`, { method: "POST", body: {} });
+		assert.ok((await kinds(admin)).includes("report_waiting"));
+		await admin.request(`/api/projects/${project}/reports/${report}/decision`, { method: "POST", body: { decision: "revise", comment: "More" } });
+		const back = (await inbox(staff)).notifications.find((item) => item.kind === "report_returned");
+		assert.equal(back.href, `/projects/${project}?tab=reports`);
+		await staff.request("/api/directory/me", { method: "PUT", body: { listed: true, displayName: "River" } });
+		assert.ok((await kinds(admin)).includes("display_name_waiting"));
+		assert.ok(!(await kinds(lead)).includes("display_name_waiting"));
+	});
+});
+
+describe("joining from an invitation", () => {
+	let admin, tokenFor;
+	const email = (name) => `${name}.${Date.now()}@journey.example`;
+	const invite = async (address) => {
+		await admin.request("/api/organizations/current/invitations", { method: "POST", body: { email: address, role: "staff" } });
+		const token = "inv" + Math.random().toString(36).slice(2) + Date.now();
+		const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+		sql(`UPDATE invitations SET token_hash = '${hash}' WHERE email = '${address}'`);
+		return token;
+	};
+
+	before(async () => {
+		admin = await new Client().signUpAndIn("invadmin");
+		await admin.createOrg("invorg");
+		tokenFor = invite;
+	});
+
+	test("an invited person signs in straight away, without confirming their email", async () => {
+		const address = email("newperson");
+		const token = await tokenFor(address);
+		const person = new Client();
+		const made = await person.request("/api/invitations/sign-up", { method: "POST", body: { token, name: "New Person", password: "Long-Enough-1" } });
+		assert.equal(made.status, 201);
+		assert.equal(made.data.email, address);
+		assert.equal((await person.request("/api/auth/sign-in/email", { method: "POST", body: { email: address, password: "Long-Enough-1" } })).status, 200);
+		assert.equal((await person.request("/api/invitations/accept", { method: "POST", body: { token } })).status, 200);
+		assert.equal((await person.request("/api/me")).data.memberships.length, 1);
+	});
+
+	test("it needs a real, unexpired invitation and can't take over an account", async () => {
+		assert.equal((await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token: "nope", name: "X", password: "Long-Enough-1" } })).status, 404);
+		const address = email("short");
+		const token = await tokenFor(address);
+		assert.equal((await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token, name: "X", password: "short" } })).data.code, "INVALID_PASSWORD");
+		assert.equal((await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token, name: "", password: "Long-Enough-1" } })).data.code, "INVALID_NAME");
+		const first = await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token, name: "First", password: "Long-Enough-1" } });
+		assert.equal(first.status, 201);
+		const again = await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token, name: "Second", password: "Other-Password-2" } });
+		assert.equal(again.data.code, "EMAIL_EXISTS", "an account that exists can't be replaced");
+		const stolen = await new Client().request("/api/auth/sign-in/email", { method: "POST", body: { email: address, password: "Other-Password-2" } });
+		assert.notEqual(stolen.status, 200);
+		const late = email("late");
+		const lateToken = await tokenFor(late);
+		sql(`UPDATE invitations SET expires_at = 1000 WHERE email = '${late}'`);
+		assert.equal((await new Client().request("/api/invitations/sign-up", { method: "POST", body: { token: lateToken, name: "L", password: "Long-Enough-1" } })).data.code, "INVITE_EXPIRED");
+	});
+});
+
+describe("superadmin pages from the server", () => {
+	let platform;
+	before(async () => {
+		platform = await new Client().signUpAndIn("pageplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+	});
+
+	test("organizations and users come a page at a time, with totals for everything", async () => {
+		const page = (await platform.request("/api/superadmin/organizations?limit=5")).data;
+		assert.equal(page.organizations.length, 5);
+		assert.ok(page.matching >= 5);
+		assert.ok(page.totals.organizations >= page.matching);
+		const none = (await platform.request("/api/superadmin/organizations?limit=5&q=zzzzz-nothing")).data;
+		assert.equal(none.matching, 0);
+		assert.ok(none.totals.organizations > 0, "totals don't shrink with the search");
+		const users = (await platform.request("/api/superadmin/users?limit=3")).data;
+		assert.equal(users.users.length, 3);
+		assert.ok(users.matching >= 3);
+		assert.ok((await platform.request("/api/superadmin/organizations")).data.organizations.length >= page.matching, "the picker still gets everyone");
+		assert.equal((await new Client().request("/api/superadmin/organizations?limit=5")).status, 401);
+	});
+});
+
+describe("integrations settings", () => {
+	let admin, lead;
+	before(async () => {
+		admin = await new Client().signUpAndIn("intadmin");
+		const org = (await admin.createOrg("intorg")).data.id;
+		lead = await new Client().signUpAndIn("intlead");
+		addMember(lead.userId, org, "manager");
+	});
+
+	test("an admin can turn Ask AidNova off, and it stops answering", async () => {
+		const ask = () => lead.request("/api/assistant", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+		assert.equal((await ask()).status, 200);
+		assert.equal((await lead.request("/api/organizations/current/assistant", { method: "PUT", body: { enabled: false } })).status, 403);
+		assert.equal((await admin.request("/api/organizations/current/assistant", { method: "PUT", body: { enabled: false } })).status, 200);
+		assert.equal((await ask()).data.code, "ASSISTANT_OFF");
+		assert.equal((await lead.request("/api/me")).data.memberships[0].assistantEnabled, false);
+		await admin.request("/api/organizations/current/assistant", { method: "PUT", body: { enabled: true } });
+		assert.equal((await ask()).status, 200);
+	});
+
+	test("a test email goes only to the admin who asked", async () => {
+		assert.equal((await lead.request("/api/organizations/current/test-email", { method: "POST" })).status, 403);
+		const sent = await admin.request("/api/organizations/current/test-email", { method: "POST" });
+		assert.equal(sent.status, 200);
+		assert.match(sent.data.sentTo, /intadmin/);
+	});
+});

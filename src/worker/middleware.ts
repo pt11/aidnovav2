@@ -26,6 +26,7 @@ export interface Membership {
 	role: Role;
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
 	trialEndDate: Date | null;
+	assistantEnabled: boolean;
 }
 
 export interface AppEnv {
@@ -96,6 +97,7 @@ export function getMemberships(db: Db, userId: string): Promise<Membership[]> {
 			role: userProfiles.role,
 			subscriptionStatus: organizations.subscriptionStatus,
 			trialEndDate: organizations.trialEndDate,
+			assistantEnabled: organizations.assistantEnabled,
 		})
 		.from(userProfiles)
 		.innerJoin(

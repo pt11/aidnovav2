@@ -19,6 +19,7 @@ import { memberPhotoUrl } from "./media";
 import { jsonError, requireOrg, requireRole, requireUser, type AppEnv } from "./middleware";
 import { requireModule } from "./modules";
 import { cleanText, readJson } from "./validate";
+import { notifyPeople } from "./notifications";
 
 // Each skill stands on its own. There's no overall score and no ranking anywhere,
 // and finishing a workshop never raises a level: only an assessor does.
@@ -243,6 +244,8 @@ capacitySkillRoutes.post("/capacity/my-skills", ...gate, async (c) => {
 		.insert(capacityUserSkills)
 		.values({ ...pending, organizationId, userId, skillId: skill.id })
 		.onConflictDoUpdate({ target: [capacityUserSkills.userId, capacityUserSkills.skillId], set: pending });
+	const routing = await loadRouting(db, organizationId);
+	await notifyPeople(c, routing.reviewersFor(userId).map((person) => person.userId), "skill_nominated", { person: routing.byId.get(userId)?.name ?? "", skill: skill.name }, "/capacity/skills");
 	return c.json({ ok: true }, 201);
 });
 
@@ -375,6 +378,7 @@ capacitySkillRoutes.post("/capacity/assessments/:id", ...gate, async (c) => {
 		if (!feedback) return jsonError(c, 400, "FEEDBACK_REQUIRED", "Say why.");
 		await db.update(capacityUserSkills).set({ pendingLevel: null, feedback, privateNote: privateNote || null }).where(eq(capacityUserSkills.id, found.row.id));
 		await audit(c, "skill_declined", String(found.row.id));
+		await notifyPeople(c, [found.row.userId], "skill_declined", { skill: found.skill.name }, "/capacity/skills");
 		return c.json({ ok: true });
 	}
 	const level = Number(body.level);
@@ -384,6 +388,7 @@ capacitySkillRoutes.post("/capacity/assessments/:id", ...gate, async (c) => {
 		.set({ level, pendingLevel: null, feedback: feedback || null, privateNote: privateNote || null, assessedBy: c.get("user").id, assessedAt: new Date(), rubricVersion: found.skill.rubricVersion })
 		.where(eq(capacityUserSkills.id, found.row.id));
 	await audit(c, "skill_assessed", String(found.row.id));
+	await notifyPeople(c, [found.row.userId], "skill_assessed", { skill: found.skill.name, level }, "/capacity/skills");
 	return c.json({ ok: true });
 });
 
@@ -582,6 +587,10 @@ capacitySkillRoutes.put("/directory/me", ...directoryGate, async (c) => {
 		.insert(directoryProfiles)
 		.values({ ...values, organizationId, userId })
 		.onConflictDoUpdate({ target: [directoryProfiles.organizationId, directoryProfiles.userId], set: values });
+	if (displayName && !approved && existing?.displayName !== displayName) {
+		const routing = await loadRouting(db, organizationId);
+		await notifyPeople(c, routing.people.filter((person) => person.role === "admin" && person.isActive).map((person) => person.userId), "display_name_waiting", { name: displayName }, "/directory");
+	}
 	return c.json({ ok: true, displayNamePending: !!displayName && !approved });
 });
 
@@ -621,5 +630,6 @@ capacitySkillRoutes.post("/directory/display-names/:id", ...directoryGate, requi
 	const approve = (await readJson(c.req.raw)).approve === true;
 	await db.update(directoryProfiles).set(approve ? { displayNameApproved: true } : { displayName: null, displayNameApproved: false, listed: false }).where(eq(directoryProfiles.id, profile.id));
 	await audit(c, approve ? "display_name_approved" : "display_name_declined", String(profile.id));
+	await notifyPeople(c, [profile.userId], approve ? "display_name_approved" : "display_name_declined", { name: profile.displayName ?? "" }, approve ? "/directory" : "/directory/privacy");
 	return c.json({ ok: true });
 });

@@ -33,6 +33,7 @@ import {
 } from "./middleware";
 import { getOrgLimits, getStorageUsed } from "./plans";
 import { cleanText, isSafeLink, readJson } from "./validate";
+import { notifyPeople } from "./notifications";
 
 const MAX_COVER_BYTES = 2 * 1024 * 1024;
 const MAX_MATERIAL_BYTES = 50 * 1024 * 1024;
@@ -2210,6 +2211,7 @@ courseRoutes.post("/courses/:id/enrollments", requireUser, requireOrg, requireMa
 		audit(db, org.organizationId, actorId, "course.assigned", course.id, { people: list.length }),
 		...statements,
 	]);
+	await notifyPeople(c, list as string[], "course_assigned", { title: course.title }, `/courses/${course.id}`);
 	return c.json({ assigned: list.length }, 201);
 });
 

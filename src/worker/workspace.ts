@@ -25,6 +25,7 @@ import { courseOverview, pendingCoursesFor } from "./courses";
 import { complianceOverview, pendingPoliciesFor } from "./policies";
 import type { Db } from "./db";
 import { cleanText, isEmail, isSafeLink, readJson } from "./validate";
+import { activeMemberIds, notifyPeople } from "./notifications";
 
 const PRIORITIES = ["normal", "high", "urgent"] as const;
 type Priority = (typeof PRIORITIES)[number];
@@ -279,6 +280,7 @@ workspace.post(
 				createdBy: c.get("user").id,
 			})
 			.returning({ id: announcements.id });
+		await notifyPeople(c, await activeMemberIds(c.get("db"), org.organizationId), values.priority === "urgent" ? "announcement_urgent" : "announcement", { title: values.title }, "/");
 		return c.json(created, 201);
 	},
 );

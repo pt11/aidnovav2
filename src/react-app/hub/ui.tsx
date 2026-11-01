@@ -220,7 +220,7 @@ export function Segmented<T extends string>({
 }) {
 	const group = {
 		segmented: "inline-flex max-w-full flex-wrap rounded-md border border-border bg-muted p-[3px]",
-		underline: "flex max-w-full gap-4 overflow-x-auto border-b border-border",
+		underline: "flex max-w-full flex-wrap gap-x-4 border-b border-border",
 		pills: "inline-flex max-w-full flex-wrap justify-center gap-2",
 	}[look];
 	const item = (selected: boolean) =>
@@ -641,6 +641,22 @@ function DismissButton({ onClick, className = "" }: { onClick: () => void; class
 	);
 }
 
+export function Toggle({ checked, label, disabled = false, onChange }: { checked: boolean; label: string; disabled?: boolean; onChange: (value: boolean) => void }) {
+	return (
+		<button
+			type="button"
+			role="switch"
+			aria-checked={checked}
+			aria-label={label}
+			disabled={disabled}
+			className={`relative h-5 w-9 shrink-0 rounded-full transition-colors disabled:opacity-50 ${checked ? "bg-primary" : "bg-input"}`}
+			onClick={() => onChange(!checked)}
+		>
+			<span className={`absolute top-0.5 size-4 rounded-full bg-white transition-all ${checked ? "left-[18px]" : "left-0.5"}`} />
+		</button>
+	);
+}
+
 // With no title, the message itself is the title. Errors interrupt screen readers; the rest wait.
 export function Alert({
 	children,
@@ -781,14 +797,18 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 export function StatePanel({
 	icon: Icon,
 	title,
+	pageTitle = false,
 	description,
 	action,
 }: {
+	// Only when this is the whole page, with no other main heading.
+	pageTitle?: boolean;
 	icon?: LucideIcon;
 	title: string;
 	description?: string;
 	action?: ReactNode;
 }) {
+	const Heading = pageTitle ? "h1" : "h2";
 	return (
 		<div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4 py-16 text-center">
 			{Icon && (
@@ -796,7 +816,7 @@ export function StatePanel({
 					<Icon size={20} aria-hidden="true" />
 				</span>
 			)}
-			<h1 className="text-lg font-semibold">{title}</h1>
+			<Heading className="text-lg font-semibold">{title}</Heading>
 			{description && (
 				<p className="text-sm text-muted-foreground">{description}</p>
 			)}
@@ -1011,7 +1031,7 @@ export function DataTable({
 	minWidth = 640,
 	head,
 	bare = false,
-	stacked = false,
+	stacked = true,
 	children,
 }: {
 	minWidth?: number;
@@ -1020,9 +1040,20 @@ export function DataTable({
 	stacked?: boolean;
 	children: ReactNode;
 }) {
+	const table = useRef<HTMLTableElement>(null);
+	// On phones each cell shows its column's name, read from the header row.
+	useEffect(() => {
+		if (!stacked || !table.current) return;
+		const names = [...table.current.tHead!.rows[0].cells].map((cell) => cell.innerText.trim());
+		for (const row of table.current.tBodies[0].rows) {
+			[...row.cells].forEach((cell, index) => {
+				if (index > 0 && names[index]) cell.dataset.label = names[index];
+			});
+		}
+	});
 	return (
 		<div className={`overflow-x-auto ${bare ? "" : "rounded-card border border-border bg-card"}`}>
-			<table className={`w-full text-left text-[13px] ${stacked ? "stack-table" : ""}`} style={stacked ? undefined : { minWidth }}>
+			<table ref={table} className={`w-full text-left text-[13px] ${stacked ? "stack-table md:[min-width:var(--table-min)]" : ""}`} style={stacked ? ({ "--table-min": `${minWidth}px` } as React.CSSProperties) : { minWidth }}>
 				<thead className="bg-background text-xs text-muted-foreground">
 					<tr>
 						{head.map((title, index) => (
@@ -1211,7 +1242,7 @@ export function LanguageSwitch() {
 					lang={option.value}
 					aria-pressed={language === option.value}
 					onClick={() => setLanguage(option.value)}
-					className={`rounded px-2.5 py-0.5 text-xs font-medium ${
+					className={`min-h-[30px] min-w-9 rounded px-2.5 py-0.5 text-xs font-medium md:min-h-0 md:min-w-0 ${
 						language === option.value
 							? "bg-card text-foreground shadow-sm"
 							: "text-muted-foreground"

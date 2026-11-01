@@ -10,6 +10,7 @@ import {
 	type AppEnv,
 } from "./middleware";
 import { cleanText, isSafeLink, readJson } from "./validate";
+import { activeMemberIds, notifyPeople } from "./notifications";
 
 const EVENT_TYPES = ["training", "meeting", "deadline", "holiday"] as const;
 type EventType = (typeof EVENT_TYPES)[number];
@@ -162,6 +163,7 @@ calendarRoutes.post("/events", requireUser, requireOrg, requireManager, async (c
 		targetType: "event",
 		targetId: String(created.id),
 	});
+	await notifyPeople(c, await activeMemberIds(db, org.organizationId), "event_new", { title: parsed.values.title }, "/calendar");
 	return c.json(created, 201);
 });
 

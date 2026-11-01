@@ -67,7 +67,7 @@ function turnstilePlugins(env: Env) {
 	];
 }
 
-export function createAuth(env: Env, request: Request) {
+export function createAuth(env: Env, request: Request, options: { skipConfirmationEmail?: boolean } = {}) {
 	const baseURL = getBaseUrl(env, request);
 
 	return betterAuth({
@@ -98,6 +98,7 @@ export function createAuth(env: Env, request: Request) {
 			sendOnSignUp: true,
 			autoSignInAfterVerification: true,
 			sendVerificationEmail: async ({ user, url }) => {
+				if (options.skipConfirmationEmail) return;
 				await sendEmail(env, {
 					to: user.email,
 					subject: "Confirm your AidNova email",

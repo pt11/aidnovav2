@@ -274,9 +274,9 @@ function Editor({ existing, attachmentFailed = false }: { existing: PolicyDraft 
 				<div className="min-w-0 flex-1 basis-48">
 					<p className="text-xs text-muted-foreground">{t("nav.policies")}</p>
 					<div className="flex flex-wrap items-center gap-2">
-						<span className="min-w-0 break-words text-base font-semibold">
+						<h1 className="min-w-0 break-words text-base font-semibold">
 							{values.title || t("policies.new")}
-						</span>
+						</h1>
 						<StatusBadge status={status} />
 					</div>
 				</div>

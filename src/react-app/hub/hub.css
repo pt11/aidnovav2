@@ -318,3 +318,22 @@ select[aria-invalid="true"] {
 		font-size: 12px;
 	}
 }
+
+/* A bigger tap area for plain text links and the language switch, without moving anything. */
+@media (pointer: coarse) {
+	main a:not([class*="rounded"]):not([class*="block"]):not([class*="flex"]) {
+		position: relative;
+	}
+
+	main a:not([class*="rounded"]):not([class*="block"]):not([class*="flex"])::after {
+		content: "";
+		position: absolute;
+		inset: -9px -6px;
+	}
+
+	[aria-label="Language"] button,
+	[role="group"][aria-label*="anguage"] button {
+		min-height: 34px;
+		min-width: 36px;
+	}
+}

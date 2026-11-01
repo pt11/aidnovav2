@@ -729,7 +729,7 @@ const FAQ_GROUPS: { id: string; icon: IconName; title: string; items: { q: strin
 		icon: "folder",
 		title: "Projects, Capacity Building & AI",
 		items: [
-			{ q: "Are Projects and Capacity Building available now?", a: "Not yet. They’re being built now. Tell us you’d like to try them and we’ll turn them on for your organization as they roll out." },
+			{ q: "Are Projects and Capacity Building available now?", a: "They’re built and rolling out in stages. Once a module is available for your organization, an admin turns it on in Settings. Capacity Building and People & Skills ask for a short privacy and safety review first. Want it sooner? Email us and we’ll check." },
 			{ q: "Can the AI see files I can’t open?", a: "No. It only uses content you could open yourself, and it names the source it used." },
 			{ q: "Does the AI make decisions?", a: "No. It answers questions, but approvals and changes always need a person." },
 		],

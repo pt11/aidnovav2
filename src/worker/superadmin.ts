@@ -259,8 +259,7 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 	const photoMap = new Map(photos.map((row) => [row.organizationId, row.used]));
 	const policyMap = new Map(policyCounts.map((row) => [row.organizationId, row.total]));
 	const requestMap = new Map(requests.map((row) => [row.organizationId, row]));
-	return c.json({
-		organizations: rows.map((row) => {
+	const everyone = rows.map((row) => {
 			const limits = computeLimits({
 				hasPlan: row.planId !== null,
 				maxUsers: row.planMaxUsers,
@@ -284,7 +283,30 @@ superadminRoutes.get("/superadmin/organizations", async (c) => {
 				policyCount: policyMap.get(row.id) ?? 0,
 				request: requestMap.get(row.id) ?? null,
 			};
-		}),
+	});
+	const asked = Number(c.req.query("limit"));
+	// With no limit it's the full list, which the grant form's picker needs.
+	if (!Number.isInteger(asked) || asked < 1) return c.json({ organizations: everyone });
+	const percent = (org: (typeof everyone)[number]) => (org.storageLimitBytes ? org.storageUsed / org.storageLimitBytes : 0);
+	const search = cleanText(c.req.query("q")).toLowerCase();
+	const status = c.req.query("status");
+	const matching = everyone.filter(
+		(org) =>
+			(!search || org.name.toLowerCase().includes(search) || org.ownerEmail.toLowerCase().includes(search)) &&
+			(!status || status === "all" || org.status === status) &&
+			(c.req.query("requests") !== "1" || org.request),
+	);
+	if (c.req.query("sort") === "storage") matching.sort((a, b) => percent(b) - percent(a));
+	return c.json({
+		organizations: matching.slice(0, Math.min(asked, 2000)),
+		matching: matching.length,
+		totals: {
+			organizations: everyone.length,
+			waiting: everyone.filter((org) => org.request).length,
+			stored: everyone.reduce((sum, org) => sum + org.storageUsed, 0),
+			files: everyone.reduce((sum, org) => sum + org.fileCount, 0),
+			nearLimit: everyone.filter((org) => percent(org) >= 0.9).length,
+		},
 	});
 });
 
@@ -410,6 +432,13 @@ superadminRoutes.get("/superadmin/users", async (c) => {
 	const weekAgo = new Date(Date.now() - 7 * DAY_MS);
 	const search = cleanText(c.req.query("q")).toLowerCase();
 	const pattern = `%${search.replace(/[%_]/g, "")}%`;
+	const limit = Math.min(Math.max(Number(c.req.query("limit")) || 200, 1), 1000);
+	const [[matched]] = await Promise.all([
+		db
+			.select({ total: count() })
+			.from(user)
+			.where(search ? or(sql`lower(${user.name}) LIKE ${pattern}`, sql`lower(${user.email}) LIKE ${pattern}`) : undefined),
+	]);
 	const [rows, memberships, sessions, [totals], [recent], [deactivated], [withoutOrg]] =
 		await Promise.all([
 			db
@@ -433,7 +462,7 @@ superadminRoutes.get("/superadmin/users", async (c) => {
 						: undefined,
 				)
 				.orderBy(desc(user.createdAt))
-				.limit(200),
+				.limit(limit),
 			db
 				.select({
 					userId: userProfiles.userId,
@@ -466,6 +495,7 @@ superadminRoutes.get("/superadmin/users", async (c) => {
 	}
 	const lastActive = new Map(sessions.map((row) => [row.userId, row.lastActive]));
 	return c.json({
+		matching: matched.total,
 		totals: {
 			all: totals.total,
 			signedUpThisWeek: recent.total,

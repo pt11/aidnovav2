@@ -183,6 +183,7 @@ export const organizations = sqliteTable("organizations", {
 	extraUserBlocks: integer("extra_user_blocks").notNull().default(0),
 	customMaxUsers: integer("custom_max_users"),
 	customStorageGb: integer("custom_storage_gb"),
+	assistantEnabled: integer("assistant_enabled", { mode: "boolean" }).notNull().default(true),
 	// For the team's records. Billing happens outside the app.
 	paidUntil: integer("paid_until", { mode: "timestamp_ms" }),
 	createdAt: createdAt(),
@@ -1400,4 +1401,37 @@ export const directorySettings = sqliteTable("directory_settings", {
 	showTeams: integer("show_teams", { mode: "boolean" }).notNull().default(false),
 	allowPhotos: integer("allow_photos", { mode: "boolean" }).notNull().default(false),
 	allowDisplayNames: integer("allow_display_names", { mode: "boolean" }).notNull().default(true),
+});
+
+// One person's notices, in their organization. The kind and params are stored
+// rather than the sentence, so each person reads them in their own language.
+export const notifications = sqliteTable(
+	"notifications",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		userId: text("user_id")
+			.notNull()
+			.references(() => user.id, { onDelete: "cascade" }),
+		kind: text("kind").notNull(),
+		category: text("category").notNull(),
+		params: text("params").notNull().default("{}"),
+		href: text("href").notNull(),
+		readAt: integer("read_at", { mode: "timestamp_ms" }),
+		createdAt: createdAt(),
+	},
+	(table) => [index("notifications_person_idx").on(table.userId, table.organizationId, table.createdAt)],
+);
+
+export const notificationSettings = sqliteTable("notification_settings", {
+	organizationId: integer("organization_id")
+		.primaryKey()
+		.references(() => organizations.id, { onDelete: "cascade" }),
+	policies: integer("policies", { mode: "boolean" }).notNull().default(true),
+	courses: integer("courses", { mode: "boolean" }).notNull().default(true),
+	announcements: integer("announcements", { mode: "boolean" }).notNull().default(true),
+	events: integer("events", { mode: "boolean" }).notNull().default(true),
+	welcome: integer("welcome", { mode: "boolean" }).notNull().default(true),
 });

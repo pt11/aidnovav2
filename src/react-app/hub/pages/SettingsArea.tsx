@@ -36,6 +36,8 @@ import {
 	SelectField,
 	initialsOf,
 	TextareaField,
+	Toggle,
+	useToast,
 } from "../ui";
 
 const ERROR_KEYS: Record<string, string> = {
@@ -78,6 +80,8 @@ export function SettingsLayout({
 						links: [
 							{ href: "/settings", label: "settings.general" },
 							{ href: "/settings/departments", label: "settings.departments" },
+							...(isAdmin ? [{ href: "/settings/notifications", label: "shell.notifications" }] : []),
+							...(isAdmin ? [{ href: "/settings/integrations", label: "integrations.title" }] : []),
 							...(isAdmin ? [{ href: "/settings/sign-in", label: "signin.title" }] : []),
 							{ href: "/settings/plan", label: "plan.title" },
 							...(isAdmin ? [{ href: "/settings/modules", label: "modules.title" }] : []),
@@ -100,9 +104,9 @@ export function SettingsLayout({
 			</h1>
 			<nav
 				aria-label={t("settings.sections")}
-				className="-mx-4 overflow-x-auto px-4 [scrollbar-width:none] lg:hidden [&::-webkit-scrollbar]:hidden"
+				className="lg:hidden"
 			>
-				<div className="inline-flex rounded-md border border-border bg-muted p-[3px]">
+				<div className="inline-flex flex-wrap rounded-md border border-border bg-muted p-[3px]">
 					{groups
 						.flatMap((group) => group.links)
 						.map((link) => {
@@ -626,6 +630,93 @@ function UpgradeForm({ info, canRequest }: { info: PlanInfo; canRequest: boolean
 	);
 }
 
+type NoticeSwitches = Record<"policies" | "courses" | "announcements" | "events" | "welcome", boolean>;
+
+export function SettingsNotificationsPage({ org }: { org: Membership }) {
+	const { t } = useI18n();
+	const queryClient = useQueryClient();
+	const toast = useToast();
+	const key = ["notification-settings"];
+	const settings = useQuery({ queryKey: key, queryFn: () => api<NoticeSwitches>("/organizations/current/notification-settings") });
+	const save = useMutation({
+		mutationFn: (next: NoticeSwitches) => api<NoticeSwitches>("/organizations/current/notification-settings", { method: "PUT", body: next }),
+		onSuccess: (saved, next) => {
+			queryClient.setQueryData(key, saved);
+			const changed = (Object.keys(next) as (keyof NoticeSwitches)[]).find((name) => next[name] !== settings.data?.[name]);
+			if (changed) toast.success(t(next[changed] ? "notif.switch_on" : "notif.switch_off", { name: t(`notif.switch_${changed}`) }));
+		},
+		onError: () => toast.error(t("toast.failed"), t("toast.try_again")),
+	});
+	return (
+		<SettingsLayout canManage isAdmin={org.role === "admin"} title={t("shell.notifications")} subtitle={t("notif.settings_desc", { organization: org.name })}>
+			{settings.isPending && <PageLoading variant="inline" />}
+			{settings.isError && <PageError onRetry={() => settings.refetch()} />}
+			{settings.data && (
+				<section className="rounded-card border border-border bg-card">
+					{(["policies", "courses", "announcements", "events", "welcome"] as const).map((name) => (
+						<div key={name} className="flex items-center gap-3.5 border-t border-border px-4 py-3.5 first:border-t-0">
+							<span className="min-w-0 flex-1">
+								<b className="block font-semibold">{t(`notif.switch_${name}`)}</b>
+								<span className="block text-[13px] text-muted-foreground">{t(`notif.switch_${name}_desc`)}</span>
+							</span>
+							<span className="flex items-center gap-2 text-[13px]">
+								<Toggle checked={settings.data[name]} disabled={save.isPending} label={t(`notif.switch_${name}`)} onChange={(value) => settings.data && save.mutate({ ...settings.data, [name]: value })} />
+								<span className="w-7">{t(settings.data[name] ? "notif.on" : "notif.off")}</span>
+							</span>
+						</div>
+					))}
+				</section>
+			)}
+			<p className="text-xs text-muted-foreground">{t("notif.settings_note")}</p>
+		</SettingsLayout>
+	);
+}
+
+// Only what actually exists. There's no Google Drive connection yet, and the AI
+// runs on our own account, so there's no key to paste.
+export function SettingsIntegrationsPage({ org, email }: { org: Membership; email: string }) {
+	const { t } = useI18n();
+	const queryClient = useQueryClient();
+	const toast = useToast();
+	const assistant = useMutation({
+		mutationFn: (enabled: boolean) => api("/organizations/current/assistant", { method: "PUT", body: { enabled } }),
+		onSuccess: async (_, enabled) => {
+			await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
+			toast.success(t(enabled ? "integrations.ai_on" : "integrations.ai_off"));
+		},
+		onError: () => toast.error(t("toast.failed"), t("toast.try_again")),
+	});
+	const test = useMutation({
+		mutationFn: () => api("/organizations/current/test-email", { method: "POST" }),
+		onSuccess: () => toast.success(t("integrations.test_sent", { email })),
+		onError: () => toast.error(t("integrations.test_failed"), t("toast.try_again")),
+	});
+	return (
+		<SettingsLayout canManage isAdmin title={t("integrations.title")} subtitle={t("integrations.desc")}>
+			<section className="flex flex-col gap-3.5 rounded-card border border-border bg-card p-4">
+				<div className="flex flex-wrap items-center gap-3">
+					<div className="min-w-0 flex-1 basis-60">
+						<h2 className="font-semibold">{t("shell.ask_aidnova")}</h2>
+						<p className="text-[13px] text-muted-foreground">{t("integrations.ai_desc")}</p>
+					</div>
+					<span className="flex items-center gap-2 text-[13px]">
+						<Toggle checked={org.assistantEnabled} disabled={assistant.isPending} label={t("shell.ask_aidnova")} onChange={(value) => assistant.mutate(value)} />
+						<span className="w-7">{t(org.assistantEnabled ? "notif.on" : "notif.off")}</span>
+					</span>
+				</div>
+				<Alert tone="neutral" title={t("integrations.ai_notice_title")}>{t("integrations.ai_notice")}</Alert>
+			</section>
+			<section className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+				<div className="min-w-0 flex-1 basis-60">
+					<h2 className="font-semibold">{t("integrations.email")}</h2>
+					<p className="text-[13px] text-muted-foreground">{t("integrations.email_desc")}</p>
+				</div>
+				<button type="button" disabled={test.isPending} className={buttonClass("outline")} onClick={() => test.mutate()}>{t("integrations.test")}</button>
+			</section>
+		</SettingsLayout>
+	);
+}
+
 export function SettingsPlanPage({ org }: { org: Membership }) {
 	const { t, language } = useI18n();
 	const plan = useQuery({
@@ -937,7 +1028,7 @@ export function SettingsDepartmentsPage({ isAdmin }: { isAdmin: boolean }) {
 			{departments.isError && <PageError onRetry={() => departments.refetch()} />}
 			{departments.data && (
 				<div className="overflow-x-auto rounded-card border border-border bg-card">
-					<table className="w-full min-w-[480px] text-left">
+					<table className="stack-table w-full text-left md:min-w-[480px]">
 						<thead className="bg-background text-xs text-muted-foreground">
 							<tr>
 								<th scope="col" className="px-4 py-2.5 font-semibold">

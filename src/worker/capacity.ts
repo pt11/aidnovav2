@@ -24,6 +24,7 @@ import {
 import { requireModule } from "./modules";
 import { getOrgLimits, getStorageUsed } from "./plans";
 import { cleanText, readJson } from "./validate";
+import { notifyPeople } from "./notifications";
 
 // Who attends what training can put staff at risk, so a record's details only ever
 // reach its owner and the people reviewing that owner. Managers and admins get the
@@ -440,6 +441,8 @@ capacityRoutes.post("/capacity/records/:id/submit", ...gate, async (c) => {
 		"A training report is waiting for your review",
 		"/capacity/reviews",
 	);
+	// Counted, not named: a reviewer's list shouldn't show restricted training at a glance.
+	await notifyPeople(c, routing.reviewersFor(record.userId).map((person) => person.userId), "training_waiting", {}, "/capacity/reviews");
 	return c.json({ ok: true, version });
 });
 
@@ -485,6 +488,9 @@ capacityRoutes.post("/capacity/records/:id/messages", ...gate, async (c) => {
 		? access.reviewers.map((person) => person.email)
 		: [access.routing.byId.get(record.userId)?.email].filter((email): email is string => !!email);
 	notify(c, to, "You have an update on a training record", access.as === "owner" ? "/capacity/reviews" : `/capacity/records/${record.id}`);
+	await (access.as === "owner"
+		? notifyPeople(c, access.reviewers.map((person) => person.userId), "training_message", {}, "/capacity/reviews")
+		: notifyPeople(c, [record.userId], "training_message", { title: record.title }, `/capacity/records/${record.id}`));
 	return c.json({ ok: true }, 201);
 });
 
@@ -720,6 +726,8 @@ capacityRoutes.post("/capacity/reviews/:id/decision", ...gate, async (c) => {
 	await writeAudit(db, c, decision, String(record.id), { sensitive: record.isSensitive });
 	const owner = access.routing.byId.get(record.userId);
 	if (owner) notify(c, [owner.email], "You have an update on a training record", `/capacity/records/${record.id}`);
+	const decided = { verified: "training_verified", changes_requested: "training_changes", rejected: "training_rejected" } as const;
+	await notifyPeople(c, [record.userId], decided[decision], { title: record.title }, `/capacity/records/${record.id}`);
 	return c.json({ ok: true });
 });
 

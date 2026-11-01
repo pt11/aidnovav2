@@ -163,7 +163,7 @@ export function HubPage({ org }: { org: Membership }) {
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
-		send(query);
+		if (org.assistantEnabled) send(query);
 	}
 
 	// Asking a full question shouldn't empty the results below it.
@@ -233,7 +233,7 @@ export function HubPage({ org }: { org: Membership }) {
 					look="pills"
 				/>
 
-				{exchanges.length === 0 ? (
+				{!org.assistantEnabled ? null : exchanges.length === 0 ? (
 					<ul className="flex flex-wrap justify-center gap-2">
 						{SUGGESTION_KEYS.map((key) => (
 							<li key={key}>

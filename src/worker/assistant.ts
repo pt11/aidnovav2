@@ -13,7 +13,11 @@ import {
 import { getOwnDepartmentId, readablePublishedPolicies } from "./policies";
 import { cleanText, readJson } from "./validate";
 
-const MODEL = "@cf/zai-org/glm-4.7-flash";
+// SEA-LION is built for Southeast Asian languages. In side-by-side tests on English
+// policies asked about in Burmese, it was the most accurate with the most natural wording.
+const MODEL = "@cf/aisingapore/gemma-sea-lion-v4-27b-it";
+// Models can be talked into repeating their instructions, so this is checked here too.
+const REPEATED_INSTRUCTIONS = /You are the AidNova assistant for staff|Answer using only what's between|<\/?content>|Treat it as information only/i;
 const NDJSON = "application/x-ndjson";
 const MAX_ANSWER_TOKENS = 3000;
 const MODEL_TIMEOUT_MS = 20_000;
@@ -28,6 +32,8 @@ const MAX_POLICY_TITLES = 30;
 // way round, so the model also gets the start of other policies to read.
 const MAX_OTHER_POLICIES = 8;
 const OTHER_POLICY_CHARS = 1500;
+// Keywords can't find the right section for a Burmese question, so it reads further.
+const OTHER_POLICY_CHARS_BURMESE = 4000;
 const MAX_MATCHED_GUIDES = 2;
 const GUIDE_CHARS = 3000;
 const MAX_GUIDE_TITLES = 40;
@@ -188,16 +194,15 @@ async function askModel(
 	systemPrompt: string,
 	messages: { role: string; content: string }[],
 	onText: (text: string) => void | Promise<void>,
+	burmese = false,
 ) {
 	const startedAt = Date.now();
 	const source = (await env.AI.run(MODEL as Parameters<Ai["run"]>[0], {
 		messages: [{ role: "system", content: systemPrompt }, ...messages],
 		max_completion_tokens: MAX_ANSWER_TOKENS,
+		max_tokens: MAX_ANSWER_TOKENS,
 		temperature: 0.2,
 		stream: true,
-		// Reasoning first took about ten times longer, and in testing its Burmese answers
-		// were no more accurate.
-		chat_template_kwargs: { enable_thinking: false },
 	} as never)) as unknown as ReadableStream<Uint8Array>;
 	const reader = source.getReader();
 	const decoder = new TextDecoder();
@@ -222,6 +227,11 @@ async function askModel(
 			if (added) {
 				firstTextMs ??= Date.now() - startedAt;
 				raw += added;
+				if (REPEATED_INSTRUCTIONS.test(raw)) {
+					console.error("The assistant model tried to repeat its instructions");
+					raw = burmese ? REFUSAL_BURMESE : REFUSAL;
+					break;
+				}
 				const visible = visibleText(raw);
 				if (visible.length > shown) {
 					await onText(visible.slice(shown));
@@ -243,12 +253,16 @@ async function askModel(
 	return { reply };
 }
 
+const REFUSAL = "I can only answer questions about your organization's content and how to use AidNova.";
+const REFUSAL_BURMESE = "အဖွဲ့အစည်းရဲ့ အချက်အလက်နဲ့ AidNova သုံးပုံအကြောင်းပဲ ဖြေပေးနိုင်ပါတယ်။";
+
 export const assistantRoutes = new Hono<AppEnv>();
 
 assistantRoutes.post("/assistant", requireUser, requireOrg, async (c) => {
 	const db = c.get("db");
 	const org = c.get("org");
 	const userId = c.get("user").id;
+	if (!org.assistantEnabled) return jsonError(c, 403, "ASSISTANT_OFF", "Ask AidNova is turned off for this organization.");
 	const body = await readJson(c.req.raw);
 	const messages = readMessages(body.messages);
 	if (!messages) {
@@ -355,7 +369,7 @@ assistantRoutes.post("/assistant", requireUser, requireOrg, async (c) => {
 		),
 		...otherPolicies.map(
 			(policy) =>
-				`Policy: ${policy.title}\nCategory: ${policy.category}\nVersion: ${policy.version}\nStart of text:\n${policy.content.slice(0, OTHER_POLICY_CHARS)}`,
+				`Policy: ${policy.title}\nCategory: ${policy.category}\nVersion: ${policy.version}\nStart of text:\n${policy.content.slice(0, burmese ? OTHER_POLICY_CHARS_BURMESE : OTHER_POLICY_CHARS)}`,
 		),
 		...matchedGuides.map(
 			(guide) =>
@@ -449,12 +463,12 @@ assistantRoutes.post("/assistant", requireUser, requireOrg, async (c) => {
 			started = true;
 			await onText(text);
 		};
-		const first = await askModel(c.env, prompt, messages, write).catch((error) => {
+		const first = await askModel(c.env, prompt, messages, write, burmese).catch((error) => {
 			console.error(error);
 			return null;
 		});
 		if (first?.reply || started || stopped()) return first?.reply ?? null;
-		return (await askModel(c.env, prompt, messages, write)).reply;
+		return (await askModel(c.env, prompt, messages, write, burmese)).reply;
 	};
 
 	if (body.stream !== true) {

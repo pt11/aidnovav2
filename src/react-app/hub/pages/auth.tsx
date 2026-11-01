@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { authClient, ME_QUERY_KEY } from "../api";
+import { ApiError, api, authClient, ME_QUERY_KEY } from "../api";
 import { useI18n } from "../i18n";
 import { useTurnstile } from "../turnstile";
 import { Alert, AuthCard, buttonClass, Field, PasswordField, siteUrl } from "../ui";
@@ -197,6 +197,7 @@ export function SignUpPage() {
 	const { t } = useI18n();
 	const turnstile = useTurnstile();
 	const next = inviteReturnPath();
+	const inviteToken = next ? new URLSearchParams(next.split("?")[1] ?? "").get("token") : null;
 	const [name, setName] = useState("");
 	const [email, setEmail] = useState(
 		() => new URLSearchParams(window.location.search).get("email") ?? "",
@@ -210,6 +211,20 @@ export function SignUpPage() {
 		event.preventDefault();
 		setError("");
 		setSaving(true);
+		// Someone arriving from an invitation has already proved this address.
+		if (inviteToken) {
+			try {
+				const created = await api<{ email: string }>("/invitations/sign-up", { method: "POST", body: { token: inviteToken, name: name.trim(), password } });
+				const signedIn = await authClient.signIn.email({ email: created.email, password });
+				if (signedIn.error) throw new Error("sign-in");
+				window.location.assign(next ?? "/");
+				return;
+			} catch (failure) {
+				setSaving(false);
+				setError(t(failure instanceof ApiError && failure.code === "EMAIL_EXISTS" ? "auth.email_exists" : failure instanceof ApiError && failure.code === "INVITE_EXPIRED" ? "invite.expired_desc" : "error.generic"));
+				return;
+			}
+		}
 		const result = await authClient.signUp.email({
 			name: name.trim(),
 			email,
@@ -275,7 +290,7 @@ export function SignUpPage() {
 					value={password}
 					onChange={(event) => setPassword(event.target.value)}
 				/>
-				{turnstile.widget}
+				{!inviteToken && turnstile.widget}
 				<button type="submit" disabled={saving} className={buttonClass()}>
 					{t("auth.sign_up")}
 				</button>

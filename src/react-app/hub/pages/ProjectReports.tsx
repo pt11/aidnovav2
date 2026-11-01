@@ -15,6 +15,7 @@ import {
 	TextareaField, useToast } from "../ui";
 import { uploadProjectFile, useProjectFiles } from "./ProjectFiles";
 import { shortDay } from "./Projects";
+import { periodLabel } from "./periods";
 
 export type ReportStatus = "draft" | "submitted" | "needs_revision" | "approved" | "locked";
 
@@ -68,14 +69,7 @@ export function useProjectReports(projectId: number) {
 	});
 }
 
-export function periodLabel(period: string, language: string) {
-	const quarter = /^(\d{4})-Q([1-4])$/.exec(period);
-	if (quarter) return `Q${quarter[2]} ${quarter[1]}`;
-	if (/^\d{4}-\d{2}$/.test(period)) {
-		return new Date(`${period}-01T00:00:00Z`).toLocaleDateString(language, { month: "long", year: "numeric", timeZone: "UTC" });
-	}
-	return period;
-}
+export { periodLabel };
 
 const STATUS_LOOK: Record<ReportStatus | "overdue" | "due", string> = {
 	draft: "border border-input bg-card text-foreground",

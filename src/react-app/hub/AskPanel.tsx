@@ -56,6 +56,7 @@ async function askAssistant(history: ChatMessage[], onText: (text: string) => vo
 const SUPPORT_EMAIL = "helloaidnova@gmail.com";
 export const ASSISTANT_ERRORS: Record<string, string> = {
 	ASSISTANT_LIMIT: "hub.assistant_limit",
+	ASSISTANT_OFF: "hub.assistant_off",
 	INVALID_MESSAGES: "hub.assistant_too_long",
 };
 

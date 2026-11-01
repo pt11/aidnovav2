@@ -4,8 +4,7 @@ import { Contact, Check } from "lucide-react";
 import { Link } from "wouter";
 import { api } from "../api";
 import { useI18n } from "../i18n";
-import { Alert, buttonClass, useToast, FilterSelect, PageError, PageHeader, PageLoading, StatePanel, TextareaField } from "../ui";
-import { Toggle } from "./CapacitySkills";
+import { Alert, buttonClass, Toggle, useToast, FilterSelect, PageError, PageHeader, PageLoading, StatePanel, TextareaField } from "../ui";
 
 interface Card {
 	key: number;

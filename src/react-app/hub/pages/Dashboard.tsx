@@ -22,7 +22,7 @@ import { api, type Me } from "../api";
 import { useI18n } from "../i18n";
 import { ActionsMenu, Avatar, BUTTON_SMALL, buttonClass, Chip, PageError, PageLoading } from "../ui";
 import { PriorityBadge, type Priority } from "./Announcements";
-import { periodLabel } from "./ProjectReports";
+import { periodLabel } from "./periods";
 
 interface ManagerData {
 	compliance: {
