@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CONTACT_EMAIL, Icon, SiteFooter, SiteNav, usePageMeta } from "./site";
-import { CATEGORIES, GUIDES, guidePath, guidePlainText, guidesHome, type Guide, type GuideBlock, type GuideLang } from "../../shared/guides-content";
+import { CATEGORIES, GUIDES, guidePath, guidePlainText, guideSearchWord, guidesHome, type Guide, type GuideBlock, type GuideLang } from "../../shared/guides-content";
 import "./guides.css";
 
 const COPY = {
@@ -78,7 +78,7 @@ function GuideSearch({ lang }: { lang: GuideLang }) {
 		() => GUIDES.map((guide) => ({ guide, text: `${guide.title[lang]} ${guide.summary[lang]} ${guidePlainText(guide.body[lang])}`.toLowerCase() })),
 		[lang],
 	);
-	const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+	const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean).map(guideSearchWord);
 	const results = words.length ? index.filter((entry) => words.every((word) => entry.text.includes(word))) : [];
 
 	useEffect(() => {
@@ -123,18 +123,71 @@ function GuideSearch({ lang }: { lang: GuideLang }) {
 	);
 }
 
+const FOLDED_KEY = "aidnova_guides_folded";
+
+function readFolded(): string[] {
+	try {
+		const saved = JSON.parse(localStorage.getItem(FOLDED_KEY) ?? "[]");
+		return Array.isArray(saved) ? saved : [];
+	} catch {
+		return [];
+	}
+}
+
+function saveFolded(key: string, folded: boolean) {
+	try {
+		const others = readFolded().filter((saved) => saved !== key);
+		localStorage.setItem(FOLDED_KEY, JSON.stringify(folded ? [...others, key] : others));
+	} catch {
+		// Folding still works for this page without storage.
+	}
+}
+
+// Sections start open. Pages reload between guides, so someone's folds are remembered.
+function GuideFold({
+	foldKey,
+	className,
+	keepOpen,
+	summary,
+	children,
+}: {
+	foldKey: string;
+	className: string;
+	keepOpen?: boolean;
+	summary: ReactNode;
+	children: ReactNode;
+}) {
+	const [open] = useState(() => keepOpen || !readFolded().includes(foldKey));
+	return (
+		<details className={className} open={open} onToggle={(event) => saveFolded(foldKey, !event.currentTarget.open)}>
+			<summary>
+				{summary}
+				<Icon name="chevron" size={16} color="currentColor" />
+			</summary>
+			{children}
+		</details>
+	);
+}
+
 function GuideLinks({ lang, current }: { lang: GuideLang; current?: Guide }) {
 	return (
 		<>
 			{CATEGORIES.map((category) => (
-				<div key={category.key} className="guide-nav-group">
-					<strong>{category.title[lang]}</strong>
-					{GUIDES.filter((guide) => guide.category === category.key).map((guide) => (
-						<a key={guide.slug} href={guidePath(guide, lang)} aria-current={guide === current ? "page" : undefined}>
-							{guide.title[lang]}
-						</a>
-					))}
-				</div>
+				<GuideFold
+					key={category.key}
+					foldKey={`nav:${category.key}`}
+					className="guide-nav-group"
+					keepOpen={current?.category === category.key}
+					summary={<strong>{category.title[lang]}</strong>}
+				>
+					<div className="guide-nav-links">
+						{GUIDES.filter((guide) => guide.category === category.key).map((guide) => (
+							<a key={guide.slug} href={guidePath(guide, lang)} aria-current={guide === current ? "page" : undefined}>
+								{guide.title[lang]}
+							</a>
+						))}
+					</div>
+				</GuideFold>
 			))}
 		</>
 	);
@@ -242,16 +295,17 @@ function GuidesHome({ lang }: { lang: GuideLang }) {
 					const guides = GUIDES.filter((guide) => guide.category === category.key);
 					return (
 						<section key={category.key} className="guide-category">
-							<h2>{category.title[lang]}</h2>
-							<p>{category.summary[lang]}</p>
-							<div className="guide-cards">
-								{guides.map((guide) => (
-									<a key={guide.slug} href={guidePath(guide, lang)} className="guide-card">
-										<b>{guide.title[lang]}</b>
-										<span>{guide.summary[lang]}</span>
-									</a>
-								))}
-							</div>
+							<GuideFold foldKey={`home:${category.key}`} className="guide-fold" summary={<h2>{category.title[lang]}</h2>}>
+								<p>{category.summary[lang]}</p>
+								<div className="guide-cards">
+									{guides.map((guide) => (
+										<a key={guide.slug} href={guidePath(guide, lang)} className="guide-card">
+											<b>{guide.title[lang]}</b>
+											<span>{guide.summary[lang]}</span>
+										</a>
+									))}
+								</div>
+							</GuideFold>
 						</section>
 					);
 				})}

@@ -1,7 +1,7 @@
 import { and, count, desc, eq, gt } from "drizzle-orm";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
-import { GUIDES, guidePath, guidePlainText, type GuideLang } from "../shared/guides-content";
+import { GUIDES, guidePath, guidePlainText, guideSearchWord, type GuideLang } from "../shared/guides-content";
 import { announcements, assistantUsage } from "./db/schema";
 import { listVisibleFiles } from "./files";
 import {
@@ -36,7 +36,7 @@ const OTHER_POLICY_CHARS = 1500;
 const OTHER_POLICY_CHARS_BURMESE = 4000;
 const MAX_MATCHED_GUIDES = 2;
 const GUIDE_CHARS = 3000;
-const MAX_GUIDE_TITLES = 40;
+const MAX_GUIDE_TITLES = 50;
 // Words too common to tell guides apart. Burmese is matched on how a word starts,
 // because endings change: ဖိတ်ရမလဲ has to find ဖိတ်.
 const GUIDE_STOP_WORDS = new Set(["aidnova", "app", "use", "using"]);
@@ -109,7 +109,8 @@ function matchGuides(words: string[], lang: GuideLang) {
 	const keywords = words
 		.filter((word) => !GUIDE_STOP_WORDS.has(word))
 		.map((word) => (/[\u1000-\u109f]/.test(word) ? word.slice(0, 4) : word))
-		.filter((word) => !BURMESE_STOP_STARTS.some((start) => word.startsWith(start)));
+		.filter((word) => !BURMESE_STOP_STARTS.some((start) => word.startsWith(start)))
+		.map(guideSearchWord);
 	return GUIDES.map((guide) => ({
 		guide,
 		score: scoreOf(keywords, `${guide.title[lang]} ${guide.summary[lang]}`, guidePlainText(guide.body[lang])),
