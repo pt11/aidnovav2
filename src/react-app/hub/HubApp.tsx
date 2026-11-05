@@ -56,6 +56,8 @@ const SuperOrganizationsPage = lazy(() => import("./pages/SuperAdmin").then((pag
 const SuperOverviewPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperOverviewPage })));
 const SuperPlansPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperPlansPage })));
 const SuperStoragePage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperStoragePage })));
+const SuperAiPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperAiPage })));
+const SuperAddonsPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperAddonsPage })));
 const SuperUsersPage = lazy(() => import("./pages/SuperAdmin").then((page) => ({ default: page.SuperUsersPage })));
 const CourseBuilderPage = lazy(() => import("./pages/CourseBuilder").then((page) => ({ default: page.CourseBuilderPage })));
 const CourseLearnersPage = lazy(() => import("./pages/CourseBuilder").then((page) => ({ default: page.CourseLearnersPage })));
@@ -453,6 +455,12 @@ function Gate() {
 				</Route>
 				<Route path="/superadmin/modules">
 					<SuperModulesPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/addons">
+					<SuperAddonsPage me={superMe} />
+				</Route>
+				<Route path="/superadmin/ai">
+					<SuperAiPage me={superMe} />
 				</Route>
 				<Route path="/superadmin/storage">
 					<SuperStoragePage me={superMe} />

@@ -21,6 +21,9 @@ import { projectRoutes } from "./projects";
 import { api } from "./routes";
 import { reportRoutes } from "./reports";
 import { superadminRoutes } from "./superadmin";
+import { superadminAiRoutes } from "./superadminAi";
+import { superadminAddonRoutes } from "./superadminAddons";
+import { addonRoutes } from "./addons";
 import { team } from "./team";
 import { workspace } from "./workspace";
 
@@ -53,6 +56,9 @@ app.route("/api", peopleRoutes);
 app.route("/api", planRoutes);
 app.route("/api", reportRoutes);
 app.route("/api", superadminRoutes);
+app.route("/api", superadminAiRoutes);
+app.route("/api", superadminAddonRoutes);
+app.route("/api", addonRoutes);
 
 app.notFound((c) => c.json({ code: "NOT_FOUND", message: "Not found." }, 404));
 

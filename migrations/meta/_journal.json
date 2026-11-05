@@ -155,6 +155,20 @@
       "when": 1793518130280,
       "tag": "0021_milky_chronomancer",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1793870332710,
+      "tag": "0022_dashing_mojo",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1793871413494,
+      "tag": "0023_futuristic_puff_adder",
+      "breakpoints": true
     }
   ]
 }

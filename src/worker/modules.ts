@@ -20,6 +20,7 @@ import {
 	requireUser,
 	type AppEnv,
 } from "./middleware";
+import { activeAddons } from "./addons";
 import { cleanText, readJson } from "./validate";
 
 // A safety review is recorded before these can go on, because who attends what
@@ -38,7 +39,7 @@ function isModuleKey(value: string): value is ModuleKey {
 }
 
 export async function organizationModuleStates(db: Db, organizationId: number) {
-	const [[org], platform, included, settings, overrides, plans] = await Promise.all([
+	const [[org], platform, included, settings, overrides, plans, bought] = await Promise.all([
 		db
 			.select({
 				status: organizations.subscriptionStatus,
@@ -55,6 +56,7 @@ export async function organizationModuleStates(db: Db, organizationId: number) {
 			.from(subscriptionPlans)
 			.where(eq(subscriptionPlans.isActive, true))
 			.orderBy(subscriptionPlans.sortOrder),
+		activeAddons(db, organizationId),
 	]);
 	const now = new Date();
 	return MODULES.map(({ key, needsReview }) => {
@@ -67,9 +69,12 @@ export async function organizationModuleStates(db: Db, organizationId: number) {
 		);
 		const inPlan = included.some((row) => row.moduleKey === key && row.planId === org?.planId);
 		const released = release !== "coming_soon";
+		const addon = bought.some((row) => row.addonKey === `module:${key}`);
 		const source = override
 			? ("override" as const)
-			: released && org?.status === "trial"
+			: released && addon
+				? ("addon" as const)
+				: released && org?.status === "trial"
 				? ("trial" as const)
 				: released && inPlan
 					? ("plan" as const)

@@ -31,7 +31,7 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import { Link, useLocation, useSearch } from "wouter";
-import { api, authClient, type Me, type Membership, type Role } from "./api";
+import { api, authClient, canAsk, type Me, type Membership, type Role } from "./api";
 import { useI18n } from "./i18n";
 import { AskPanel } from "./AskPanel";
 import { useCapacityMe } from "./pages/capacityMe";
@@ -895,12 +895,12 @@ export function WorkspaceShell({
 		const onKeyDown = (event: KeyboardEvent) => {
 			if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "j") {
 				event.preventDefault();
-				if (org.assistantEnabled) setAskOpen((current) => !current);
+				if (canAsk(org)) setAskOpen((current) => !current);
 			} else if (event.key === "Escape" && !document.querySelector("dialog[open]")) {
 				setAskOpen(false);
 			}
 		};
-		const openAsk = () => setAskOpen(org.assistantEnabled);
+		const openAsk = () => setAskOpen(canAsk(org));
 		document.addEventListener("keydown", onKeyDown);
 		window.addEventListener("aidnova-ask", openAsk);
 		return () => {
@@ -963,7 +963,7 @@ export function WorkspaceShell({
 					<Header
 						onOpenMenu={() => setDrawerOpen(true)}
 						askOpen={askOpen}
-						onToggleAsk={org.assistantEnabled ? () => setAskOpen((current) => !current) : undefined}
+						onToggleAsk={canAsk(org) ? () => setAskOpen((current) => !current) : undefined}
 						sidebarFolded={sidebarFolded}
 						onToggleSidebar={toggleSidebar}
 					/>
@@ -974,7 +974,7 @@ export function WorkspaceShell({
 			</div>
 
 			<AskPanel
-				open={askOpen && org.assistantEnabled}
+				open={askOpen && canAsk(org)}
 				expanded={askExpanded}
 				name={me.user.name}
 				onClose={() => setAskOpen(false)}

@@ -1,7 +1,8 @@
-import { and, count, desc, eq, gt } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { stream } from "hono/streaming";
 import { GUIDES, guidePath, guidePlainText, guideSearchWord, type GuideLang } from "../shared/guides-content";
+import { checkAiAllowance } from "./aiLimits";
 import { announcements, assistantUsage } from "./db/schema";
 import { listVisibleFiles } from "./files";
 import {
@@ -23,9 +24,6 @@ const MAX_ANSWER_TOKENS = 3000;
 const MODEL_TIMEOUT_MS = 20_000;
 const MAX_MESSAGES = 10;
 const MAX_MESSAGE_CHARS = 2000;
-const MAX_QUESTIONS_PER_USER_DAY = 30;
-const MAX_QUESTIONS_PER_ORG_DAY = 300;
-const DAY_MS = 24 * 60 * 60 * 1000;
 const EXCERPT_CHARS = 3000;
 const MAX_POLICY_TITLES = 30;
 // Keywords can't connect a Burmese question to an English policy, or the other
@@ -270,30 +268,11 @@ assistantRoutes.post("/assistant", requireUser, requireOrg, async (c) => {
 		return jsonError(c, 400, "INVALID_MESSAGES", "Enter a shorter question.");
 	}
 
-	const since = new Date(Date.now() - DAY_MS);
-	const [[mine], [organizationTotal]] = await Promise.all([
-		db
-			.select({ total: count() })
-			.from(assistantUsage)
-			.where(
-				and(eq(assistantUsage.userId, userId), gt(assistantUsage.createdAt, since)),
-			),
-		db
-			.select({ total: count() })
-			.from(assistantUsage)
-			.where(
-				and(
-					eq(assistantUsage.organizationId, org.organizationId),
-					gt(assistantUsage.createdAt, since),
-				),
-			),
-	]);
-	if (
-		mine.total >= MAX_QUESTIONS_PER_USER_DAY ||
-		organizationTotal.total >= MAX_QUESTIONS_PER_ORG_DAY
-	) {
-		return jsonError(c, 429, "ASSISTANT_LIMIT", "The assistant's daily limit has been reached.");
+	const reached = await checkAiAllowance(db, org.organizationId, userId);
+	if (reached === "ASSISTANT_PAUSED") {
+		return jsonError(c, 403, reached, "Ask AidNova is paused by the AidNova team.");
 	}
+	if (reached) return jsonError(c, 429, reached, "Ask AidNova's message limit has been reached.");
 
 	// Everything comes from the same rules as the rest of the app, so the
 	// assistant can't reveal anything this person couldn't open themselves.

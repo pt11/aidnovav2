@@ -56,6 +56,11 @@ async function askAssistant(history: ChatMessage[], onText: (text: string) => vo
 const SUPPORT_EMAIL = "helloaidnova@gmail.com";
 export const ASSISTANT_ERRORS: Record<string, string> = {
 	ASSISTANT_LIMIT: "hub.assistant_limit",
+	ASSISTANT_LIMIT_PERSON: "hub.limit_person",
+	ASSISTANT_LIMIT_DAY: "hub.limit_day",
+	ASSISTANT_LIMIT_WEEK: "hub.limit_week",
+	ASSISTANT_LIMIT_MONTH: "hub.limit_month",
+	ASSISTANT_PAUSED: "hub.assistant_paused",
 	ASSISTANT_OFF: "hub.assistant_off",
 	INVALID_MESSAGES: "hub.assistant_too_long",
 };
@@ -394,7 +399,7 @@ export function AskPanel({
 								{chat.failed && (
 									<div className="flex flex-col gap-2">
 										<Alert>{t(ASSISTANT_ERRORS[chat.errorCode] ?? "hub.assistant_failed")}</Alert>
-										{chat.errorCode !== "ASSISTANT_LIMIT" && chat.errorCode !== "INVALID_MESSAGES" && (
+										{!chat.errorCode.startsWith("ASSISTANT_LIMIT") && chat.errorCode !== "INVALID_MESSAGES" && (
 											<button type="button" className={buttonClass("outline", "self-start")} onClick={chat.retry}>
 												{t("ask.try_again")}
 											</button>

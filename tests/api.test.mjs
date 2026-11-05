@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash, createHmac } from "node:crypto";
-import { before, describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 const BASE = process.env.BASE_URL ?? "http://localhost:5173";
 const RUN = Date.now();
@@ -1284,6 +1284,8 @@ describe("assistant", () => {
 		finance = await new Client().signUpAndIn("aifinance");
 		outsider = await new Client().signUpAndIn("aiout");
 		orgId = (await admin.createOrg("iota")).data.id;
+		// These tests ask a lot, so only the per-person limit applies here.
+		sql(`INSERT INTO ai_organization_limits (organization_id, per_person_day, updated_at) VALUES (${orgId}, 30, 0)`);
 		await outsider.createOrg("kappa");
 		addMember(programs.userId, orgId, "staff");
 		addMember(finance.userId, orgId, "staff");
@@ -1390,7 +1392,7 @@ describe("assistant", () => {
 		sql(`INSERT INTO assistant_usage (organization_id, user_id) VALUES ${values}`);
 		const blocked = await ask(busy, "One more?");
 		assert.equal(blocked.status, 429);
-		assert.equal(blocked.data.code, "ASSISTANT_LIMIT");
+		assert.equal(blocked.data.code, "ASSISTANT_LIMIT_PERSON");
 		assert.equal((await ask(programs, "Still fine?")).status, 200);
 	});
 
@@ -1406,7 +1408,134 @@ describe("assistant", () => {
 			body: { organizationId: heavyOrg },
 		});
 		assert.equal(status, 200);
-		assert.equal((await ask(member, "Hello?")).status, 429);
+		const blocked = await ask(member, "Hello?");
+		assert.equal(blocked.status, 429);
+		assert.equal(blocked.data.code, "ASSISTANT_LIMIT_DAY");
+	});
+});
+
+describe("AI limits", () => {
+	let platform, admin, staff, orgId, basicId;
+	const ask = (client) => client.request("/api/assistant", { method: "POST", body: { messages: [{ role: "user", content: "Hello?" }] } });
+	const usage = (client) => client.request("/api/organizations/current/assistant-usage");
+	const fill = (count, userId, ago = 0) => {
+		const values = Array.from({ length: count }, () => `(${orgId}, '${userId}', ${Date.now() - ago})`).join(",");
+		sql(`INSERT INTO assistant_usage (organization_id, user_id, created_at) VALUES ${values}`);
+	};
+	const custom = (body) => platform.request(`/api/superadmin/ai/organizations/${orgId}`, { method: "PUT", body });
+	const none = { perDay: null, perWeek: null, perMonth: null, perPersonDay: null };
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("aiplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("ailimitadmin");
+		staff = await new Client().signUpAndIn("ailimitstaff");
+		orgId = (await admin.createOrg("ailimits")).data.id;
+		addMember(staff.userId, orgId, "staff");
+		basicId = (await platform.request("/api/superadmin/plans")).data.plans.find((p) => p.name === "Basic").id;
+	});
+
+	test("only the AidNova team can see or change AI limits", async () => {
+		const routes = [
+			["GET", "/api/superadmin/ai"],
+			["PUT", "/api/superadmin/ai/platform"],
+			["PUT", `/api/superadmin/ai/plans/${basicId}`],
+			["PUT", `/api/superadmin/ai/organizations/${orgId}`],
+			["DELETE", `/api/superadmin/ai/organizations/${orgId}`],
+		];
+		for (const [method, path] of routes) {
+			const body = method === "PUT" ? none : undefined;
+			assert.equal((await admin.request(path, { method, body })).status, 403, path);
+			assert.equal((await new Client().request(path, { method, body })).status, 401, path);
+		}
+	});
+
+	test("a trial organization gets the trial limits, and admins can see their usage", async () => {
+		const { data } = await usage(admin);
+		assert.equal(data.source, "trial");
+		assert.deepEqual(data.limits, { perDay: 40, perWeek: 150, perMonth: 300, perPersonDay: 10 });
+		assert.equal(data.usage.month, 0);
+		assert.equal((await usage(staff)).status, 403);
+		assert.equal((await ask(staff)).status, 200);
+		assert.equal((await usage(admin)).data.usage.day, 1);
+	});
+
+	test("a plan's limits apply, and extra user blocks add to the month", async () => {
+		await platform.request(`/api/superadmin/organizations/${orgId}`, { method: "PATCH", body: { planId: basicId, extraUserBlocks: 2 } });
+		const { data } = await usage(admin);
+		assert.equal(data.source, "plan");
+		assert.equal(data.planName, "Basic");
+		assert.deepEqual(data.limits, { perDay: 80, perWeek: 300, perMonth: 1600, perPersonDay: 20 });
+	});
+
+	test("custom limits beat the plan, and each limit names itself when it's reached", async () => {
+		assert.equal((await custom({ ...none, perPersonDay: "x" })).status, 400);
+		assert.equal((await custom({ ...none, perMonth: -1 })).status, 400);
+		assert.equal((await custom({ ...none, perPersonDay: 2, note: "Pilot" })).status, 200);
+		assert.equal((await usage(admin)).data.source, "custom");
+		fill(1, staff.userId);
+		const person = await ask(staff);
+		assert.equal(person.data.code, "ASSISTANT_LIMIT_PERSON");
+		assert.equal((await ask(admin)).status, 200, "someone else in the organization can still ask");
+
+		await custom({ ...none, perDay: 3 });
+		const used = (await usage(admin)).data.usage.day;
+		assert.ok(used >= 3, String(used));
+		assert.equal((await ask(admin)).data.code, "ASSISTANT_LIMIT_DAY");
+
+		// Older messages count for the week and month, but not for today.
+		const day = 24 * 60 * 60 * 1000;
+		await custom({ ...none, perMonth: used + 50 });
+		fill(50, admin.userId, 40 * day);
+		const before = (await usage(admin)).data.usage;
+		assert.equal(before.day, used, "messages from 40 days ago don't count today");
+		assert.equal((await ask(admin)).status, 200, "and they're outside this month");
+		fill(60, admin.userId);
+		assert.equal((await ask(admin)).data.code, "ASSISTANT_LIMIT_MONTH");
+
+		await custom({ ...none, perWeek: 1 });
+		assert.equal((await ask(admin)).data.code, "ASSISTANT_LIMIT_WEEK");
+
+		assert.equal((await platform.request(`/api/superadmin/ai/organizations/${orgId}`, { method: "DELETE" })).status, 200);
+		assert.equal((await usage(admin)).data.source, "plan");
+	});
+
+	test("the AidNova team sees counts per organization, never the questions", async () => {
+		const { data } = await platform.request(`/api/superadmin/ai?q=${encodeURIComponent("ailimits")}`);
+		const row = data.organizations.find((org) => org.id === orgId);
+		assert.ok(row.usage.month > 0);
+		assert.equal(row.planName, "Basic");
+		assert.ok(!JSON.stringify(data).includes("Hello?"));
+		assert.ok(data.plans.some((plan) => plan.id === basicId && plan.limits.perMonth === 1000));
+		assert.ok(data.cost.perMessage > 0);
+	});
+
+	test("a plan's limits can be changed", async () => {
+		const plan = (await platform.request("/api/superadmin/ai")).data.plans.find((p) => p.id === basicId).limits;
+		assert.equal((await platform.request(`/api/superadmin/ai/plans/${basicId}`, { method: "PUT", body: { ...plan, perPersonDay: 21 } })).status, 200);
+		assert.equal((await usage(admin)).data.limits.perPersonDay, 21);
+		assert.equal((await platform.request(`/api/superadmin/ai/plans/${basicId}`, { method: "PUT", body: plan })).status, 200);
+		assert.equal((await platform.request("/api/superadmin/ai/plans/999999", { method: "PUT", body: plan })).status, 404);
+	});
+
+	test("pausing stops every organization, and resuming brings it back", async () => {
+		const { data } = await platform.request("/api/superadmin/ai");
+		const settings = { trial: data.platform.trial, perExtraBlock: data.platform.perExtraBlock };
+		const other = await new Client().signUpAndIn("aipausecheck");
+		await other.createOrg("aipause");
+		try {
+			assert.equal((await platform.request("/api/superadmin/ai/platform", { method: "PUT", body: { ...settings, enabled: false } })).status, 200);
+			const paused = await ask(other);
+			assert.equal(paused.status, 403);
+			assert.equal(paused.data.code, "ASSISTANT_PAUSED");
+			const me = (await other.request("/api/me")).data;
+			assert.equal(me.memberships[0].assistantPaused, true);
+			assert.equal((await usage(admin)).data.paused, true);
+		} finally {
+			await platform.request("/api/superadmin/ai/platform", { method: "PUT", body: { ...settings, enabled: true } });
+		}
+		assert.equal((await ask(other)).status, 200);
+		assert.equal((await platform.request("/api/superadmin/ai/platform", { method: "PUT", body: { ...settings, enabled: true, perExtraBlock: -5 } })).status, 400);
 	});
 });
 
@@ -4006,5 +4135,120 @@ describe("integrations settings", () => {
 		const sent = await admin.request("/api/organizations/current/test-email", { method: "POST" });
 		assert.equal(sent.status, 200);
 		assert.match(sent.data.sentTo, /intadmin/);
+	});
+});
+
+describe("add-ons", () => {
+	let platform, admin, staff, orgId, releaseBefore;
+	const CURRENT = "/api/organizations/current";
+	const catalog = async () => (await platform.request("/api/superadmin/addons")).data.catalog;
+	const price = (key, body) => platform.request(`/api/superadmin/addons/${encodeURIComponent(key)}`, { method: "PUT", body });
+	const module = async (key) => (await admin.request(`${CURRENT}/modules`)).data.modules.find((item) => item.key === key);
+	const offSale = (unitSize = null) => ({ monthlyPrice: 0, yearlyPrice: 0, unitSize, onSale: false });
+
+	before(async () => {
+		platform = await new Client().signUpAndIn("addonplatform");
+		sql(`UPDATE user SET is_super_admin = 1 WHERE id = '${platform.userId}'`);
+		admin = await new Client().signUpAndIn("addonadmin");
+		staff = await new Client().signUpAndIn("addonstaff");
+		orgId = (await admin.createOrg("addons")).data.id;
+		addMember(staff.userId, orgId, "staff");
+		// A paying organization without a plan that includes the directory.
+		await platform.request(`/api/superadmin/organizations/${orgId}`, { method: "PATCH", body: { status: "active" } });
+		releaseBefore = (await platform.request("/api/superadmin/modules")).data.modules.find((item) => item.key === "people_directory").release;
+		await platform.request("/api/superadmin/modules/people_directory", { method: "PATCH", body: { release: "available" } });
+	});
+
+	after(async () => {
+		await price("module:people_directory", offSale());
+		await price("ai:messages", offSale(1000));
+		await platform.request("/api/superadmin/modules/people_directory", { method: "PATCH", body: { release: releaseBefore } });
+	});
+
+	test("only the AidNova team manages add-ons", async () => {
+		const routes = [
+			["GET", "/api/superadmin/addons"],
+			["PUT", "/api/superadmin/addons/ai%3Amessages"],
+			["POST", "/api/superadmin/organization-addons"],
+			["POST", "/api/superadmin/organization-addons/1/cancel"],
+			["POST", "/api/superadmin/addon-requests/1/approve"],
+		];
+		for (const [method, path] of routes) {
+			const body = method === "GET" ? undefined : {};
+			assert.equal((await admin.request(path, { method, body })).status, 403, path);
+			assert.equal((await new Client().request(path, { method, body })).status, 401, path);
+		}
+	});
+
+	test("every add-on starts off sale, so customers see nothing", async () => {
+		const items = await catalog();
+		assert.deepEqual(items.map((item) => item.key).sort(), ["ai:messages", "module:capacity_building", "module:people_directory", "module:projects"]);
+		const mine = (await admin.request(`${CURRENT}/addons`)).data;
+		assert.deepEqual(mine.forSale.filter((item) => item.key === "module:people_directory"), []);
+		const asked = await admin.request(`${CURRENT}/addon-requests`, { method: "POST", body: { addonKey: "module:people_directory", billingCycle: "monthly" } });
+		assert.equal(asked.data.code, "NOT_ON_SALE");
+	});
+
+	test("something can only go on sale with a price", async () => {
+		assert.equal((await price("module:people_directory", { monthlyPrice: 0, yearlyPrice: 0, unitSize: null, onSale: true })).data.code, "NO_PRICE");
+		assert.equal((await price("module:people_directory", { monthlyPrice: -1, yearlyPrice: 0, unitSize: null, onSale: false })).status, 400);
+		assert.equal((await price("ai:messages", { monthlyPrice: 500, yearlyPrice: 5000, unitSize: 0, onSale: false })).status, 400);
+		assert.equal((await price("nope", offSale())).status, 404);
+		assert.equal((await price("module:people_directory", { monthlyPrice: 1000, yearlyPrice: 10000, unitSize: null, onSale: true })).status, 200);
+		const forSale = (await staff.request(`${CURRENT}/addons`)).data.forSale;
+		assert.ok(forSale.some((item) => item.key === "module:people_directory" && item.monthlyPrice === 1000));
+	});
+
+	test("an admin asks for an add-on, and approving it turns on the module's access", async () => {
+		assert.equal((await module("people_directory")).entitled, false);
+		const body = { addonKey: "module:people_directory", billingCycle: "yearly", message: "For our HR team" };
+		assert.equal((await staff.request(`${CURRENT}/addon-requests`, { method: "POST", body })).status, 403);
+		assert.equal((await admin.request(`${CURRENT}/addon-requests`, { method: "POST", body })).status, 201);
+		assert.equal((await admin.request(`${CURRENT}/addon-requests`, { method: "POST", body })).data.code, "ALREADY_REQUESTED");
+		const { data } = await platform.request("/api/superadmin/addons");
+		const request = data.requests.find((row) => row.organizationId === orgId);
+		assert.equal(request.message, "For our HR team");
+		assert.equal((await platform.request("/api/superadmin/overview")).data.addonRequests >= 1, true);
+		assert.equal((await platform.request(`/api/superadmin/addon-requests/${request.id}/approve`, { method: "POST" })).status, 200);
+		const owned = (await admin.request(`${CURRENT}/addons`)).data.active.find((row) => row.key === "module:people_directory");
+		assert.equal(owned.price, 10000, "the yearly list price is recorded");
+		const state = await module("people_directory");
+		assert.equal(state.entitled, true);
+		assert.equal(state.source, "addon");
+		const again = await platform.request("/api/superadmin/organization-addons", {
+			method: "POST",
+			body: { organizationId: orgId, addonKey: "module:people_directory", price: 0, billingCycle: "monthly" },
+		});
+		assert.equal(again.data.code, "ALREADY_ADDED");
+	});
+
+	test("message packs add to the monthly Ask AidNova limit, even with custom limits", async () => {
+		const before = (await admin.request(`${CURRENT}/assistant-usage`)).data;
+		const added = await platform.request("/api/superadmin/organization-addons", {
+			method: "POST",
+			body: { organizationId: orgId, addonKey: "ai:messages", quantity: 2, price: 1000, billingCycle: "monthly", note: "Quote 7" },
+		});
+		assert.equal(added.status, 201);
+		const after = (await admin.request(`${CURRENT}/assistant-usage`)).data;
+		assert.equal(after.packMessages, 2000);
+		assert.equal(after.limits.perMonth, before.limits.perMonth + 2000);
+		await platform.request(`/api/superadmin/ai/organizations/${orgId}`, { method: "PUT", body: { perDay: null, perWeek: null, perMonth: 100, perPersonDay: null } });
+		assert.equal((await admin.request(`${CURRENT}/assistant-usage`)).data.limits.perMonth, 2100);
+		await platform.request(`/api/superadmin/ai/organizations/${orgId}`, { method: "DELETE" });
+		assert.equal((await platform.request("/api/superadmin/organization-addons", { method: "POST", body: { organizationId: orgId, addonKey: "ai:messages", quantity: 0, price: 0, billingCycle: "monthly" } })).status, 400);
+	});
+
+	test("cancelling or an end date in the past stops an add-on", async () => {
+		const { data } = await platform.request("/api/superadmin/addons");
+		const directory = data.active.find((row) => row.organizationId === orgId && row.addonKey === "module:people_directory");
+		assert.equal((await platform.request(`/api/superadmin/organization-addons/${directory.id}/cancel`, { method: "POST" })).status, 200);
+		assert.equal((await module("people_directory")).entitled, false);
+		assert.equal((await platform.request(`/api/superadmin/organization-addons/${directory.id}/cancel`, { method: "POST" })).status, 404);
+		const ended = await platform.request("/api/superadmin/organization-addons", {
+			method: "POST",
+			body: { organizationId: orgId, addonKey: "module:people_directory", price: 0, billingCycle: "monthly", endsAt: "2020-01-01" },
+		});
+		assert.equal(ended.status, 201);
+		assert.equal((await module("people_directory")).entitled, false, "an add-on that has ended gives nothing");
 	});
 });

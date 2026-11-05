@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gt, isNotNull, lt, or, sql, sum } from "drizzle-orm";
 import { Hono } from "hono";
 import {
+	addonRequests,
 	auditLog,
 	courses,
 	lessonMaterials,
@@ -152,6 +153,10 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 			planTotals.set(name, (planTotals.get(name) ?? 0) + row.total);
 		}
 	}
+	const [addonsWaiting] = await db
+		.select({ total: count() })
+		.from(addonRequests)
+		.where(eq(addonRequests.status, "pending"));
 	return c.json({
 		organizations: statusTotals,
 		users: users.total,
@@ -165,6 +170,7 @@ superadminRoutes.get("/superadmin/overview", async (c) => {
 			Number(logoStorage.used ?? 0) +
 			Number(photoStorage.used ?? 0),
 		requests,
+		addonRequests: Number(addonsWaiting.total),
 		trials,
 		plans: [...planTotals].map(([name, total]) => ({ name, total })),
 	});

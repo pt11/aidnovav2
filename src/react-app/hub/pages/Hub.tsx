@@ -14,7 +14,7 @@ import {
 	type LucideIcon,
 } from "lucide-react";
 import { Link, useSearch } from "wouter";
-import { api, type Membership } from "../api";
+import { api, canAsk, type Membership } from "../api";
 import {
 	ASSISTANT_ERRORS,
 	sourceLinks,
@@ -163,7 +163,7 @@ export function HubPage({ org }: { org: Membership }) {
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
-		if (org.assistantEnabled) send(query);
+		if (canAsk(org)) send(query);
 	}
 
 	// Asking a full question shouldn't empty the results below it.
@@ -233,7 +233,7 @@ export function HubPage({ org }: { org: Membership }) {
 					look="pills"
 				/>
 
-				{!org.assistantEnabled ? null : exchanges.length === 0 ? (
+				{!canAsk(org) ? null : exchanges.length === 0 ? (
 					<ul className="flex flex-wrap justify-center gap-2">
 						{SUGGESTION_KEYS.map((key) => (
 							<li key={key}>

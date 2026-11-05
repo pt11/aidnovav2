@@ -1,10 +1,10 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import { createMiddleware } from "hono/factory";
 import { createAuth, getBaseUrl } from "./auth";
 import { getDb, type Db } from "./db";
-import { organizations, userProfiles } from "./db/schema";
+import { aiPlatform, organizations, userProfiles } from "./db/schema";
 
 export type Role = "staff" | "manager" | "admin";
 
@@ -27,6 +27,8 @@ export interface Membership {
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
 	trialEndDate: Date | null;
 	assistantEnabled: boolean;
+	// The AidNova team can pause Ask AidNova for everyone.
+	assistantPaused: boolean;
 }
 
 export interface AppEnv {
@@ -98,6 +100,7 @@ export function getMemberships(db: Db, userId: string): Promise<Membership[]> {
 			subscriptionStatus: organizations.subscriptionStatus,
 			trialEndDate: organizations.trialEndDate,
 			assistantEnabled: organizations.assistantEnabled,
+			assistantPaused: sql<boolean>`coalesce((select ${aiPlatform.enabled} = 0 from ${aiPlatform} where ${aiPlatform.id} = 1), 0)`.mapWith(Boolean),
 		})
 		.from(userProfiles)
 		.innerJoin(

@@ -17,8 +17,12 @@ export interface Membership {
 	subscriptionStatus: "trial" | "active" | "suspended" | "cancelled";
 	trialEndDate: string | null;
 	assistantEnabled: boolean;
+	// Set by the AidNova team for every organization at once.
+	assistantPaused: boolean;
 	access: OrgAccess;
 }
+
+export const canAsk = (org: Pick<Membership, "assistantEnabled" | "assistantPaused">) => org.assistantEnabled && !org.assistantPaused;
 
 export interface Me {
 	user: {

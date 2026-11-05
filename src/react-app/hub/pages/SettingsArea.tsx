@@ -674,6 +674,69 @@ export function SettingsNotificationsPage({ org }: { org: Membership }) {
 
 // Only what actually exists. There's no Google Drive connection yet, and the AI
 // runs on our own account, so there's no key to paste.
+interface AssistantUsage {
+	paused: boolean;
+	source: "custom" | "plan" | "trial";
+	planName: string | null;
+	packMessages: number;
+	limits: { perDay: number | null; perWeek: number | null; perMonth: number | null; perPersonDay: number | null };
+	usage: { day: number; week: number; month: number };
+}
+
+function AssistantUsageSection() {
+	const { t } = useI18n();
+	const usage = useQuery({
+		queryKey: ["assistant-usage"],
+		queryFn: () => api<AssistantUsage>("/organizations/current/assistant-usage"),
+	});
+	if (!usage.data) return null;
+	const { limits, usage: used, source, planName } = usage.data;
+	const rows = [
+		{ label: t("integrations.today"), used: used.day, limit: limits.perDay },
+		{ label: t("integrations.this_week"), used: used.week, limit: limits.perWeek },
+		{ label: t("integrations.this_month"), used: used.month, limit: limits.perMonth },
+	];
+	return (
+		<div className="flex flex-col gap-3 border-t border-border pt-3.5">
+			<h3 className="text-[15px] font-semibold">{t("integrations.usage_title")}</h3>
+			<div className="grid gap-3 sm:grid-cols-3">
+				{rows.map((row) => (
+					<div key={row.label}>
+						<p className="text-[13px] text-muted-foreground">{row.label}</p>
+						<p className="font-semibold tabular-nums">
+							{row.limit === null
+								? t("integrations.used_no_limit", { used: row.used })
+								: t("integrations.used_of", { used: row.used, limit: row.limit })}
+						</p>
+						{row.limit !== null && row.limit > 0 && (
+							<UsageBar percent={Math.min(100, Math.round((row.used / row.limit) * 100))} label={row.label} />
+						)}
+					</div>
+				))}
+			</div>
+			<ul className="flex flex-col gap-1 text-[13px] text-muted-foreground">
+				<li>
+					{limits.perPersonDay === null
+						? t("integrations.per_person_none")
+						: t("integrations.per_person", { count: limits.perPersonDay })}
+				</li>
+				<li>
+					{source === "custom"
+						? t("integrations.from_custom")
+						: source === "trial"
+							? t("integrations.from_trial")
+							: t("integrations.from_plan", { plan: planName ?? "" })}{" "}
+					{t("integrations.need_more")}
+				</li>
+				{usage.data.packMessages > 0 && (
+					<li>{t("integrations.packs", { count: usage.data.packMessages.toLocaleString() })}</li>
+				)}
+				<li>{t("integrations.resets")}</li>
+			</ul>
+		</div>
+	);
+}
+
 export function SettingsIntegrationsPage({ org, email }: { org: Membership; email: string }) {
 	const { t } = useI18n();
 	const queryClient = useQueryClient();
@@ -704,7 +767,9 @@ export function SettingsIntegrationsPage({ org, email }: { org: Membership; emai
 						<span className="w-7">{t(org.assistantEnabled ? "notif.on" : "notif.off")}</span>
 					</span>
 				</div>
+				{org.assistantPaused && <Alert tone="warning">{t("integrations.paused")}</Alert>}
 				<Alert tone="neutral" title={t("integrations.ai_notice_title")}>{t("integrations.ai_notice")}</Alert>
+				<AssistantUsageSection />
 			</section>
 			<section className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
 				<div className="min-w-0 flex-1 basis-60">
@@ -808,9 +873,157 @@ export function SettingsPlanPage({ org }: { org: Membership }) {
 					) : (
 						<UpgradeForm info={data} canRequest={org.role === "admin"} />
 					)}
+					<AddonsSection canRequest={org.role === "admin"} />
 				</>
 			)}
 		</SettingsLayout>
+	);
+}
+
+type AddonKey = "module:projects" | "module:capacity_building" | "module:people_directory" | "ai:messages";
+
+interface AddonsInfo {
+	active: { key: AddonKey; quantity: number; price: number; billingCycle: "monthly" | "yearly"; endsAt: string | null; unitSize: number | null }[];
+	forSale: { key: AddonKey; monthlyPrice: number; yearlyPrice: number; unitSize: number | null }[];
+	pending: { addonKey: AddonKey; quantity: number; createdAt: string }[];
+}
+
+const ADDON_NAME_KEYS: Record<AddonKey, string> = {
+	"module:projects": "modules.projects",
+	"module:capacity_building": "modules.capacity_building",
+	"module:people_directory": "modules.people_directory",
+	"ai:messages": "addons.ai_pack",
+};
+
+const usd = (cents: number) => `$${(cents / 100).toLocaleString("en-US", { minimumFractionDigits: cents % 100 ? 2 : 0 })}`;
+
+// Hidden until the AidNova team has something on sale, or this organization has an add-on.
+function AddonsSection({ canRequest }: { canRequest: boolean }) {
+	const { t, language } = useI18n();
+	const toast = useToast();
+	const queryClient = useQueryClient();
+	const info = useQuery({ queryKey: ["addons"], queryFn: () => api<AddonsInfo>("/organizations/current/addons") });
+	const [asking, setAsking] = useState<AddonsInfo["forSale"][number] | null>(null);
+	const [quantity, setQuantity] = useState("1");
+	const [cycle, setCycle] = useState<"monthly" | "yearly">("monthly");
+	const [message, setMessage] = useState("");
+	const request = useMutation({
+		mutationFn: () =>
+			api("/organizations/current/addon-requests", {
+				method: "POST",
+				body: { addonKey: asking?.key, quantity: Number(quantity || 1), billingCycle: cycle, message },
+			}),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["addons"] });
+			setAsking(null);
+			toast.success(t("addons.sent"));
+		},
+	});
+	if (!info.data || (info.data.active.length === 0 && info.data.forSale.length === 0)) return null;
+	const { active, forSale, pending } = info.data;
+	const name = (key: AddonKey) => t(ADDON_NAME_KEYS[key]);
+	const price = (cents: number, billing: "monthly" | "yearly") =>
+		t(billing === "yearly" ? "plan.per_year" : "plan.per_month", { price: usd(cents) });
+	return (
+		<section className="flex flex-col gap-3.5 rounded-card border border-border bg-card p-5">
+			<div>
+				<h2 className="font-semibold">{t("addons.title")}</h2>
+				<p className="text-[13px] text-muted-foreground">{t("addons.desc")}</p>
+			</div>
+			{active.length > 0 && (
+				<ul className="flex flex-col gap-2">
+					{active.map((item) => (
+						<li key={`${item.key}-${item.price}-${item.quantity}`} className="flex flex-wrap items-center gap-2 text-[13px]">
+							<span className="font-medium">{name(item.key)}</span>
+							{item.key === "ai:messages" && item.unitSize !== null && (
+								<span className="text-muted-foreground">{t("addons.pack_total", { count: (item.quantity * item.unitSize).toLocaleString() })}</span>
+							)}
+							<span className="text-muted-foreground">· {item.price === 0 ? t("addons.included") : price(item.price, item.billingCycle)}</span>
+							{item.endsAt && (
+								<span className="text-muted-foreground">
+									· {t("addons.until", { date: new Date(item.endsAt).toLocaleDateString(language, { dateStyle: "medium" }) })}
+								</span>
+							)}
+						</li>
+					))}
+				</ul>
+			)}
+			{forSale.length > 0 && (
+				<ul className="grid gap-3 sm:grid-cols-2">
+					{forSale.map((item) => {
+						const waiting = pending.some((row) => row.addonKey === item.key);
+						const owned = item.key !== "ai:messages" && active.some((row) => row.key === item.key);
+						return (
+							<li key={item.key} className="flex flex-col gap-1.5 rounded-md border border-border p-3.5">
+								<p className="font-medium">{name(item.key)}</p>
+								<p className="text-[13px] text-muted-foreground">
+									{price(item.monthlyPrice, "monthly")}
+									{item.key === "ai:messages" && item.unitSize !== null && ` · ${t("addons.pack_size", { count: item.unitSize.toLocaleString() })}`}
+								</p>
+								{waiting ? (
+									<p role="status" className="text-[13px] font-medium">{t("addons.waiting")}</p>
+								) : owned ? null : canRequest ? (
+									<button
+										type="button"
+										className={buttonClass("outline", "self-start")}
+										onClick={() => {
+											request.reset();
+											setQuantity("1");
+											setCycle("monthly");
+											setMessage("");
+											setAsking(item);
+										}}
+									>
+										{t("addons.ask")}
+									</button>
+								) : (
+									<p className="text-xs text-muted-foreground">{t("plan.admin_only")}</p>
+								)}
+							</li>
+						);
+					})}
+				</ul>
+			)}
+			<Modal title={asking ? t("addons.ask_title", { name: name(asking.key) }) : ""} open={asking !== null} onClose={() => setAsking(null)}>
+				{asking && (
+					<form
+						className="flex flex-col gap-3.5"
+						onSubmit={(event) => {
+							event.preventDefault();
+							request.mutate();
+						}}
+					>
+						{request.isError && <Alert>{t(errorKey(request.error))}</Alert>}
+						{asking.key === "ai:messages" && (
+							<Field
+								label={t("addons.packs")}
+								type="number"
+								min={1}
+								max={100}
+								required
+								hint={asking.unitSize !== null ? t("addons.pack_size", { count: asking.unitSize.toLocaleString() }) : undefined}
+								value={quantity}
+								onChange={(event) => setQuantity(event.target.value)}
+							/>
+						)}
+						<SelectField label={t("plan.billing")} value={cycle} onChange={(event) => setCycle(event.target.value as "monthly" | "yearly")}>
+							<option value="monthly">{`${t("plan.monthly")} · ${price(asking.monthlyPrice, "monthly")}`}</option>
+							<option value="yearly">{`${t("plan.yearly")} · ${price(asking.yearlyPrice, "yearly")}`}</option>
+						</SelectField>
+						<TextareaField label={t("plan.message")} rows={2} maxLength={1000} value={message} onChange={(event) => setMessage(event.target.value)} />
+						<p className="text-xs text-muted-foreground">{t("addons.no_payment")}</p>
+						<div className="flex justify-end gap-2">
+							<button type="button" className={buttonClass("outline")} onClick={() => setAsking(null)}>
+								{t("common.cancel")}
+							</button>
+							<button type="submit" disabled={request.isPending} className={buttonClass()}>
+								{t("addons.send")}
+							</button>
+						</div>
+					</form>
+				)}
+			</Modal>
+		</section>
 	);
 }
 

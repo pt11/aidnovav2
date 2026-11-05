@@ -142,6 +142,11 @@ export const subscriptionPlans = sqliteTable("subscription_plans", {
 	storageLimitGb: integer("storage_limit_gb"),
 	isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
 	sortOrder: integer("sort_order").notNull().default(0),
+	// Ask AidNova messages. null means no limit.
+	aiPerDay: integer("ai_per_day").default(80),
+	aiPerWeek: integer("ai_per_week").default(300),
+	aiPerMonth: integer("ai_per_month").default(1000),
+	aiPerPersonDay: integer("ai_per_person_day").default(20),
 	createdAt: createdAt(),
 });
 
@@ -506,6 +511,91 @@ export const assistantUsage = sqliteTable(
 		index("assistant_usage_org_idx").on(table.organizationId, table.createdAt),
 		index("assistant_usage_user_idx").on(table.userId, table.createdAt),
 	],
+);
+
+// One row for the whole platform: the AidNova team's switch, and the limits for
+// organizations without a plan, who are on a free trial.
+export const aiPlatform = sqliteTable("ai_platform", {
+	id: integer("id").primaryKey(),
+	enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+	trialPerDay: integer("trial_per_day").default(40),
+	trialPerWeek: integer("trial_per_week").default(150),
+	trialPerMonth: integer("trial_per_month").default(300),
+	trialPerPersonDay: integer("trial_per_person_day").default(10),
+	// Each extra block of users adds this many messages a month.
+	perExtraBlock: integer("per_extra_block").notNull().default(300),
+	updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+	updatedAt: integer("updated_at", { mode: "timestamp_ms" }),
+});
+
+// Custom limits for one organization, which replace its plan's. null means no limit.
+export const aiOrganizationLimits = sqliteTable("ai_organization_limits", {
+	organizationId: integer("organization_id")
+		.primaryKey()
+		.references(() => organizations.id, { onDelete: "cascade" }),
+	perDay: integer("per_day"),
+	perWeek: integer("per_week"),
+	perMonth: integer("per_month"),
+	perPersonDay: integer("per_person_day"),
+	note: text("note"),
+	updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+	updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
+// Things sold on top of a plan: each optional module, and packs of Ask AidNova
+// messages. Prices are in US cents. Nothing is offered to customers until it's on sale.
+export const addons = sqliteTable("addons", {
+	key: text("key").primaryKey(),
+	monthlyPrice: integer("monthly_price").notNull().default(0),
+	yearlyPrice: integer("yearly_price").notNull().default(0),
+	// For a message pack, how many messages a month one pack adds.
+	unitSize: integer("unit_size"),
+	onSale: integer("on_sale", { mode: "boolean" }).notNull().default(false),
+	updatedBy: text("updated_by").references(() => user.id, { onDelete: "set null" }),
+	updatedAt: integer("updated_at", { mode: "timestamp_ms" }),
+});
+
+// What an organization has bought, with the price agreed at the time.
+// Billing happens outside the app, as it does for plans.
+export const organizationAddons = sqliteTable(
+	"organization_addons",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		addonKey: text("addon_key").notNull(),
+		quantity: integer("quantity").notNull().default(1),
+		price: integer("price").notNull().default(0),
+		billingCycle: text("billing_cycle", { enum: ["monthly", "yearly"] }).notNull().default("monthly"),
+		status: text("status", { enum: ["active", "cancelled"] }).notNull().default("active"),
+		endsAt: integer("ends_at", { mode: "timestamp_ms" }),
+		note: text("note"),
+		createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+		createdAt: createdAt(),
+		cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
+	},
+	(table) => [index("organization_addons_org_idx").on(table.organizationId, table.status)],
+);
+
+export const addonRequests = sqliteTable(
+	"addon_requests",
+	{
+		id: integer("id").primaryKey({ autoIncrement: true }),
+		organizationId: integer("organization_id")
+			.notNull()
+			.references(() => organizations.id, { onDelete: "cascade" }),
+		addonKey: text("addon_key").notNull(),
+		quantity: integer("quantity").notNull().default(1),
+		billingCycle: text("billing_cycle", { enum: ["monthly", "yearly"] }).notNull().default("monthly"),
+		message: text("message"),
+		status: text("status", { enum: ["pending", "approved", "dismissed"] }).notNull().default("pending"),
+		requestedBy: text("requested_by").references(() => user.id, { onDelete: "set null" }),
+		resolvedBy: text("resolved_by").references(() => user.id, { onDelete: "set null" }),
+		resolvedAt: integer("resolved_at", { mode: "timestamp_ms" }),
+		createdAt: createdAt(),
+	},
+	(table) => [index("addon_requests_status_idx").on(table.status, table.organizationId)],
 );
 
 export const upgradeRequests = sqliteTable(

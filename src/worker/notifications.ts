@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, isNull, lt } from "drizzle-orm";
 import { Hono } from "hono";
 import type { Context } from "hono";
+import { getOrgAiLimits, getOrgAiUsage } from "./aiLimits";
 import { auditLog, notifications, notificationSettings, organizations, userProfiles } from "./db/schema";
 import { sendEmail } from "./email";
 import type { Db } from "./db";
@@ -145,6 +146,25 @@ notificationRoutes.delete("/notifications/:id", ...gate, async (c) => {
 
 notificationRoutes.get("/organizations/current/integrations", ...gate, requireRole("admin"), (c) => {
 	return c.json({ assistantEnabled: c.get("org").assistantEnabled });
+});
+
+// Counts only, so admins can see how much of their allowance is left.
+notificationRoutes.get("/organizations/current/assistant-usage", ...gate, requireRole("admin"), async (c) => {
+	const db = c.get("db");
+	const org = c.get("org");
+	const [{ limits, source, planName, enabled, packMessages }, usage] = await Promise.all([
+		getOrgAiLimits(db, org.organizationId),
+		getOrgAiUsage(db, org.organizationId),
+	]);
+	return c.json({
+		paused: !enabled,
+		source,
+		planName,
+		packMessages,
+		limits,
+		usage: { day: usage.day, week: usage.week, month: usage.month },
+		resets: { day: usage.periods.nextDay, week: usage.periods.nextWeek, month: usage.periods.nextMonth },
+	});
 });
 
 notificationRoutes.put("/organizations/current/assistant", ...gate, requireRole("admin"), async (c) => {

@@ -19,6 +19,7 @@ import {
 	SelectField,
 	TABLE_CELL,
 	TextareaField,
+	Toggle,
 } from "../ui";
 
 // These screens are only for the AidNova team, so they're in English only.
@@ -43,6 +44,7 @@ interface Overview {
 	newOrganizations: number;
 	storageUsed: number;
 	requests: PendingRequest[];
+	addonRequests: number;
 	trials: { id: number; name: string; trialEndDate: string | null }[];
 	plans: { name: string; total: number }[];
 }
@@ -116,7 +118,7 @@ function usePendingCount() {
 		queryKey: OVERVIEW_KEY,
 		queryFn: () => api<Overview>("/superadmin/overview"),
 	});
-	return overview.data?.requests.length ?? 0;
+	return { plans: overview.data?.requests.length ?? 0, addons: overview.data?.addonRequests ?? 0 };
 }
 
 const NAV = [
@@ -125,6 +127,8 @@ const NAV = [
 	{ href: "/superadmin/users", label: "Users" },
 	{ href: "/superadmin/plans", label: "Plans" },
 	{ href: "/superadmin/modules", label: "Modules" },
+	{ href: "/superadmin/ai", label: "AI" },
+	{ href: "/superadmin/addons", label: "Add-ons" },
 	{ href: "/superadmin/storage", label: "Storage" },
 ];
 
@@ -183,9 +187,9 @@ function Layout({
 								}`}
 							>
 								<span className="flex-1">{item.label}</span>
-								{item.label === "Organizations" && pending > 0 && (
+								{(item.label === "Organizations" ? pending.plans : item.label === "Add-ons" ? pending.addons : 0) > 0 && (
 									<span className="rounded-full bg-[#DC2828] px-[7px] text-[11px] font-bold text-white">
-										{pending}
+										{item.label === "Organizations" ? pending.plans : pending.addons}
 									</span>
 								)}
 							</Link>
@@ -1801,6 +1805,781 @@ export function SuperStoragePage({ me }: { me: Me }) {
 					</section>
 				</>
 			)}
+		</Layout>
+	);
+}
+
+interface AiLimits {
+	perDay: number | null;
+	perWeek: number | null;
+	perMonth: number | null;
+	perPersonDay: number | null;
+}
+
+interface AiOrganization {
+	id: number;
+	name: string;
+	planName: string | null;
+	assistantEnabled: boolean;
+	source: "custom" | "plan" | "trial";
+	limits: AiLimits;
+	note: string | null;
+	packMessages: number;
+	usage: { day: number; week: number; month: number };
+}
+
+interface AiOverview {
+	platform: { enabled: boolean; trial: AiLimits; perExtraBlock: number };
+	plans: { id: number; name: string; monthlyPrice: number; isActive: boolean; limits: AiLimits }[];
+	totals: { day: number; week: number; month: number; organizations: number; people: number };
+	cost: { perMessage: number; perMessageHigh: number };
+	organizations: AiOrganization[];
+	matching: number;
+}
+
+const AI_KEY = ["superadmin", "ai"];
+const LIMIT_FIELDS: { key: keyof AiLimits; label: string }[] = [
+	{ key: "perDay", label: "Messages a day" },
+	{ key: "perWeek", label: "Messages a week" },
+	{ key: "perMonth", label: "Messages a month" },
+	{ key: "perPersonDay", label: "Each person, a day" },
+];
+
+const limitText = (value: number | null) => (value === null ? "No limit" : value.toLocaleString());
+const dollars = (value: number) => `$${value < 10 ? value.toFixed(2) : Math.round(value).toLocaleString()}`;
+
+function UsedOf({ used, limit }: { used: number; limit: number | null }) {
+	const near = limit !== null && limit > 0 && used / limit >= 0.9;
+	return (
+		<span className={`tabular-nums ${near ? "font-semibold text-danger-foreground" : ""}`}>
+			{used.toLocaleString()}
+			<span className="text-muted-foreground"> / {limit === null ? "∞" : limit.toLocaleString()}</span>
+		</span>
+	);
+}
+
+// What a month at the limit would cost, against what the plan earns.
+function CostLine({ perMonth, price, cost }: { perMonth: number | null; price?: number; cost: AiOverview["cost"] }) {
+	if (perMonth === null) return <>No monthly limit, so no ceiling on cost.</>;
+	const typical = perMonth * cost.perMessage;
+	const high = perMonth * cost.perMessageHigh;
+	const share = price ? ` · ${Math.round((typical / (price / 100)) * 100)}–${Math.round((high / (price / 100)) * 100)}% of the price` : "";
+	return (
+		<>
+			If every message is used: about {dollars(typical)} a month, {dollars(high)} at most{share}
+		</>
+	);
+}
+
+function LimitsForm({
+	initial,
+	path,
+	method = "PUT",
+	extraBlock,
+	note,
+	onRemove,
+	onDone,
+}: {
+	initial: AiLimits;
+	path: string;
+	method?: "PUT";
+	extraBlock?: { value: number; enabled: boolean };
+	note?: string | null;
+	onRemove?: () => Promise<unknown>;
+	onDone: () => void;
+}) {
+	const queryClient = useQueryClient();
+	const [values, setValues] = useState<Record<keyof AiLimits, string>>({
+		perDay: initial.perDay === null ? "" : String(initial.perDay),
+		perWeek: initial.perWeek === null ? "" : String(initial.perWeek),
+		perMonth: initial.perMonth === null ? "" : String(initial.perMonth),
+		perPersonDay: initial.perPersonDay === null ? "" : String(initial.perPersonDay),
+	});
+	const [block, setBlock] = useState(String(extraBlock?.value ?? 0));
+	const [noteText, setNoteText] = useState(note ?? "");
+	const limits = {
+		perDay: numberOrNull(values.perDay),
+		perWeek: numberOrNull(values.perWeek),
+		perMonth: numberOrNull(values.perMonth),
+		perPersonDay: numberOrNull(values.perPersonDay),
+	};
+	const save = useMutation({
+		mutationFn: () =>
+			api(path, {
+				method,
+				body: extraBlock
+					? { enabled: extraBlock.enabled, trial: limits, perExtraBlock: Number(block || 0) }
+					: { ...limits, ...(note !== undefined ? { note: noteText } : {}) },
+			}),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: AI_KEY });
+			onDone();
+		},
+	});
+	const remove = useMutation({
+		mutationFn: () => onRemove?.() ?? Promise.resolve(),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: AI_KEY });
+			onDone();
+		},
+	});
+	function submit(event: FormEvent) {
+		event.preventDefault();
+		save.mutate();
+	}
+	return (
+		<form onSubmit={submit} className="flex flex-col gap-3.5">
+			{(save.isError || remove.isError) && <Alert>That didn't save. Each limit is a whole number, or empty for no limit.</Alert>}
+			<div className="grid grid-cols-2 gap-3">
+				{LIMIT_FIELDS.map((field) => (
+					<Field
+						key={field.key}
+						label={field.label}
+						type="number"
+						min={0}
+						max={1000000}
+						hint="Empty for no limit"
+						value={values[field.key]}
+						onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
+					/>
+				))}
+				{extraBlock && (
+					<Field
+						label="Added a month per extra user block"
+						type="number"
+						min={0}
+						max={1000000}
+						required
+						hint="Each block is 25 users at $10 a month"
+						value={block}
+						onChange={(event) => setBlock(event.target.value)}
+					/>
+				)}
+			</div>
+			{note !== undefined && (
+				<TextareaField
+					label="Note"
+					rows={2}
+					maxLength={300}
+					hint="Why these limits, for example a custom quote. Only the AidNova team sees it."
+					value={noteText}
+					onChange={(event) => setNoteText(event.target.value)}
+				/>
+			)}
+			<p className="text-xs leading-5 text-muted-foreground">
+				Days reset at midnight Myanmar time, weeks on Monday and months on the 1st. 0 stops all messages.
+			</p>
+			<div className="flex flex-wrap justify-end gap-2">
+				{onRemove && (
+					<button type="button" disabled={remove.isPending} className={buttonClass("dangerGhost", "mr-auto")} onClick={() => remove.mutate()}>
+						Use plan limits again
+					</button>
+				)}
+				<button type="button" className={buttonClass("outline")} onClick={onDone}>
+					Cancel
+				</button>
+				<button type="submit" disabled={save.isPending} className={buttonClass()}>
+					Save limits
+				</button>
+			</div>
+		</form>
+	);
+}
+
+type AiEditing =
+	| { kind: "trial" }
+	| { kind: "plan"; plan: AiOverview["plans"][number] }
+	| { kind: "organization"; org: AiOrganization };
+
+export function SuperAiPage({ me }: { me: Me }) {
+	const queryClient = useQueryClient();
+	const [search, setSearch] = useState("");
+	const q = useDeferredValue(search.trim());
+	const overview = useQuery({
+		queryKey: [...AI_KEY, q],
+		queryFn: () => api<AiOverview>(`/superadmin/ai${q ? `?q=${encodeURIComponent(q)}` : ""}`),
+		placeholderData: keepPreviousData,
+	});
+	const [editing, setEditing] = useState<AiEditing | null>(null);
+	const [pausing, setPausing] = useState(false);
+	const data = overview.data;
+	const setEnabled = useMutation({
+		mutationFn: (enabled: boolean) =>
+			api("/superadmin/ai/platform", {
+				method: "PUT",
+				body: { enabled, trial: data?.platform.trial, perExtraBlock: data?.platform.perExtraBlock },
+			}),
+		onSuccess: async () => {
+			setPausing(false);
+			await queryClient.invalidateQueries({ queryKey: AI_KEY });
+		},
+	});
+	const title =
+		editing?.kind === "trial"
+			? "Free trial limits"
+			: editing?.kind === "plan"
+				? `${editing.plan.name} plan limits`
+				: editing?.kind === "organization"
+					? `Custom limits for ${editing.org.name}`
+					: "";
+
+	return (
+		<Layout me={me} title="AI" subtitle="Ask AidNova limits and usage. You see counts only, never anyone's questions.">
+			{overview.isPending && <PageLoading variant="inline" />}
+			{overview.isError && <PageError onRetry={() => overview.refetch()} />}
+			{data && (
+				<>
+					<section className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+						<div className="min-w-0 flex-[1_1_260px]">
+							<h2 className="font-semibold">Ask AidNova for every organization</h2>
+							<p className="text-[13px] text-muted-foreground">
+								{data.platform.enabled
+									? "On. Each organization's admin can still turn it off for their own staff."
+									: "Paused. Staff see that it's paused, and every setting and limit is kept."}
+							</p>
+						</div>
+						<span className="flex items-center gap-2 text-[13px]">
+							<Toggle
+								checked={data.platform.enabled}
+								disabled={setEnabled.isPending}
+								label="Ask AidNova for every organization"
+								onChange={(value) => (value ? setEnabled.mutate(true) : setPausing(true))}
+							/>
+							<span className="w-12">{data.platform.enabled ? "On" : "Paused"}</span>
+						</span>
+					</section>
+
+					<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+						<StatCard label="Messages today" value={data.totals.day.toLocaleString()} />
+						<StatCard label="This week" value={data.totals.week.toLocaleString()} />
+						<StatCard
+							label="This month"
+							value={data.totals.month.toLocaleString()}
+							detail={`About ${dollars(data.totals.month * data.cost.perMessage)} so far`}
+						/>
+						<StatCard
+							label="Using it this month"
+							value={plural(data.totals.organizations, "organization")}
+							detail={`${data.totals.people.toLocaleString()} ${data.totals.people === 1 ? "person" : "people"}`}
+						/>
+					</div>
+
+					<section className="flex flex-col gap-3">
+						<div>
+							<h2 className="text-lg font-semibold">Limits</h2>
+							<p className="text-[13px] text-muted-foreground">
+								Costs are estimates: about ${data.cost.perMessage} a message on average and ${data.cost.perMessageHigh} for a
+								long conversation, measured with SEA-LION. Cloudflare's free daily allowance covers roughly the first 55
+								messages a day across the platform.
+							</p>
+						</div>
+						<ul className="flex flex-col gap-3">
+							<li className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+								<div className="min-w-0 flex-[1_1_260px]">
+									<p className="font-semibold">Free trial (no plan)</p>
+									<p className="text-[13px] text-muted-foreground">
+										{limitText(data.platform.trial.perDay)} a day · {limitText(data.platform.trial.perWeek)} a week ·{" "}
+										{limitText(data.platform.trial.perMonth)} a month · {limitText(data.platform.trial.perPersonDay)} per person a day
+									</p>
+									<p className="text-[13px] text-muted-foreground">
+										<CostLine perMonth={data.platform.trial.perMonth} cost={data.cost} />
+									</p>
+								</div>
+								<button type="button" aria-label="Edit free trial limits" className={buttonClass("outline")} onClick={() => setEditing({ kind: "trial" })}>
+									Edit
+								</button>
+							</li>
+							{data.plans.map((plan) => (
+								<li key={plan.id} className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+									<div className="min-w-0 flex-[1_1_260px]">
+										<p className="flex flex-wrap items-center gap-2 font-semibold">
+											{plan.name}
+											<span className="text-[13px] font-normal text-muted-foreground">{money(plan.monthlyPrice)} / month</span>
+											{!plan.isActive && <Chip tone="neutral">Off</Chip>}
+										</p>
+										<p className="text-[13px] text-muted-foreground">
+											{limitText(plan.limits.perDay)} a day · {limitText(plan.limits.perWeek)} a week · {limitText(plan.limits.perMonth)}{" "}
+											a month · {limitText(plan.limits.perPersonDay)} per person a day · +{data.platform.perExtraBlock} a month per
+											extra user block
+										</p>
+										<p className="text-[13px] text-muted-foreground">
+											<CostLine perMonth={plan.limits.perMonth} price={plan.monthlyPrice} cost={data.cost} />
+										</p>
+									</div>
+									<button type="button" aria-label={`Edit ${plan.name} limits`} className={buttonClass("outline")} onClick={() => setEditing({ kind: "plan", plan })}>
+										Edit
+									</button>
+								</li>
+							))}
+						</ul>
+					</section>
+
+					<section className="flex flex-col gap-3">
+						<div>
+							<h2 className="text-lg font-semibold">Organizations</h2>
+							<p className="text-[13px] text-muted-foreground">
+								Those using Ask AidNova this month, and any with custom limits. Search to find any organization.
+							</p>
+						</div>
+						<SearchField label="Search organizations…" value={search} onChange={setSearch} />
+						{data.organizations.length === 0 ? (
+							<p className="rounded-card border border-border bg-card p-4 text-muted-foreground">
+								{q ? "No organizations match." : "Nobody has used Ask AidNova this month yet."}
+							</p>
+						) : (
+							<DataTable
+								head={["Organization", "Today", "This week", "This month", "Per person a day", <span key="actions" className="sr-only">Actions</span>]}
+							>
+								{data.organizations.map((org) => (
+									<tr key={org.id}>
+										<td className={`${TABLE_CELL} break-words`}>
+											<span className="block font-medium">{org.name}</span>
+											<span className="flex flex-wrap items-center gap-1.5 text-[13px] text-muted-foreground">
+												{org.source === "custom" ? (
+													<Chip tone="primary">Custom</Chip>
+												) : org.source === "trial" ? (
+													"Free trial"
+												) : (
+													org.planName
+												)}
+												{!org.assistantEnabled && <Chip tone="neutral">Turned off by admin</Chip>}
+											</span>
+											{org.note && <span className="block text-xs text-muted-foreground">{org.note}</span>}
+											{org.packMessages > 0 && (
+												<span className="block text-xs text-muted-foreground">Includes +{org.packMessages.toLocaleString()} a month from message packs</span>
+											)}
+										</td>
+										<td className={TABLE_CELL}><UsedOf used={org.usage.day} limit={org.limits.perDay} /></td>
+										<td className={TABLE_CELL}><UsedOf used={org.usage.week} limit={org.limits.perWeek} /></td>
+										<td className={TABLE_CELL}><UsedOf used={org.usage.month} limit={org.limits.perMonth} /></td>
+										<td className={`${TABLE_CELL} tabular-nums`}>{limitText(org.limits.perPersonDay)}</td>
+										<td className={`${TABLE_CELL} text-right`}>
+											<button
+												type="button"
+												aria-label={`Set limits for ${org.name}`}
+												className={buttonClass("outline", BUTTON_SMALL)}
+												onClick={() => setEditing({ kind: "organization", org })}
+											>
+												Set limits
+											</button>
+										</td>
+									</tr>
+								))}
+							</DataTable>
+						)}
+						{data.matching > data.organizations.length && (
+							<p className="text-[13px] text-muted-foreground">
+								Showing {data.organizations.length} of {data.matching}. Search to find the others.
+							</p>
+						)}
+					</section>
+				</>
+			)}
+			<Modal title={title} open={editing !== null} onClose={() => setEditing(null)}>
+				{data && editing?.kind === "trial" && (
+					<LimitsForm
+						initial={data.platform.trial}
+						path="/superadmin/ai/platform"
+						extraBlock={{ value: data.platform.perExtraBlock, enabled: data.platform.enabled }}
+						onDone={() => setEditing(null)}
+					/>
+				)}
+				{editing?.kind === "plan" && (
+					<LimitsForm key={editing.plan.id} initial={editing.plan.limits} path={`/superadmin/ai/plans/${editing.plan.id}`} onDone={() => setEditing(null)} />
+				)}
+				{editing?.kind === "organization" && (
+					<>
+						<p className="mb-3 text-[13px] text-muted-foreground">
+							Custom limits replace the {editing.org.planName ? `${editing.org.planName} plan's` : "free trial"} limits for this
+							organization only.
+						</p>
+						<LimitsForm
+							key={editing.org.id}
+							initial={editing.org.limits}
+							path={`/superadmin/ai/organizations/${editing.org.id}`}
+							note={editing.org.note ?? ""}
+							onRemove={
+								editing.org.source === "custom"
+									? () => api(`/superadmin/ai/organizations/${editing.org.id}`, { method: "DELETE" })
+									: undefined
+							}
+							onDone={() => setEditing(null)}
+						/>
+					</>
+				)}
+			</Modal>
+			<ConfirmModal
+				title="Pause Ask AidNova for every organization?"
+				description="Staff in every organization will see that it's paused until you turn it back on. Every setting and limit is kept."
+				confirmLabel="Pause for everyone"
+				open={pausing}
+				pending={setEnabled.isPending}
+				failed={setEnabled.isError}
+				failedMessage="That didn't work. Please try again."
+				onConfirm={() => setEnabled.mutate(false)}
+				onClose={() => setPausing(false)}
+			/>
+		</Layout>
+	);
+}
+
+type AddonKey = "module:projects" | "module:capacity_building" | "module:people_directory" | "ai:messages";
+
+interface AddonsOverview {
+	catalog: { key: AddonKey; monthlyPrice: number; yearlyPrice: number; unitSize: number | null; onSale: boolean }[];
+	active: {
+		id: number;
+		organizationId: number;
+		organizationName: string;
+		addonKey: AddonKey;
+		quantity: number;
+		price: number;
+		billingCycle: "monthly" | "yearly";
+		endsAt: string | null;
+		note: string | null;
+		createdAt: string;
+	}[];
+	requests: {
+		id: number;
+		organizationId: number;
+		organizationName: string;
+		addonKey: AddonKey;
+		quantity: number;
+		billingCycle: "monthly" | "yearly";
+		message: string | null;
+		createdAt: string;
+	}[];
+}
+
+const ADDONS_KEY = ["superadmin", "addons"];
+const ADDON_NAMES: Record<AddonKey, string> = {
+	"module:projects": "Projects module",
+	"module:capacity_building": "Capacity Building module",
+	"module:people_directory": "People & Skills directory",
+	"ai:messages": "Ask AidNova message pack",
+};
+
+function AddonPriceForm({ item, onDone }: { item: AddonsOverview["catalog"][number]; onDone: () => void }) {
+	const queryClient = useQueryClient();
+	const [monthly, setMonthly] = useState(String(item.monthlyPrice / 100));
+	const [yearly, setYearly] = useState(String(item.yearlyPrice / 100));
+	const [unitSize, setUnitSize] = useState(String(item.unitSize ?? ""));
+	const [onSale, setOnSale] = useState(item.onSale);
+	const save = useMutation({
+		mutationFn: () =>
+			api(`/superadmin/addons/${encodeURIComponent(item.key)}`, {
+				method: "PUT",
+				body: {
+					monthlyPrice: Math.round(Number(monthly || 0) * 100),
+					yearlyPrice: Math.round(Number(yearly || 0) * 100),
+					unitSize: item.key === "ai:messages" ? Number(unitSize) : null,
+					onSale,
+				},
+			}),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ADDONS_KEY });
+			await queryClient.invalidateQueries({ queryKey: AI_KEY });
+			onDone();
+		},
+	});
+	const noPrice = save.error instanceof ApiError && save.error.code === "NO_PRICE";
+	return (
+		<form
+			className="flex flex-col gap-3.5"
+			onSubmit={(event) => {
+				event.preventDefault();
+				save.mutate();
+			}}
+		>
+			{save.isError && <Alert>{noPrice ? "Set a price before putting it on sale." : "That didn't save. Check the prices."}</Alert>}
+			<div className="grid grid-cols-2 gap-3">
+				<Field label="Monthly price (USD)" type="number" min={0} step="0.01" required value={monthly} onChange={(event) => setMonthly(event.target.value)} />
+				<Field label="Yearly price (USD)" type="number" min={0} step="0.01" required hint="Your rule: 10 × monthly" value={yearly} onChange={(event) => setYearly(event.target.value)} />
+				{item.key === "ai:messages" && (
+					<Field label="Messages a month per pack" type="number" min={1} required value={unitSize} onChange={(event) => setUnitSize(event.target.value)} />
+				)}
+			</div>
+			{item.key === "ai:messages" && Number(unitSize) > 0 && Number(monthly) > 0 && (
+				<p className="text-[13px] text-muted-foreground">
+					A full pack costs about ${(Number(unitSize) * 0.0025).toFixed(2)}–${(Number(unitSize) * 0.006).toFixed(2)} in AI a month, so about{" "}
+					{Math.round(((Number(unitSize) * 0.0025) / Number(monthly)) * 100)}–{Math.round(((Number(unitSize) * 0.006) / Number(monthly)) * 100)}% of its price.
+				</p>
+			)}
+			<label className="flex items-start gap-2.5">
+				<input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={onSale} onChange={(event) => setOnSale(event.target.checked)} />
+				<span>
+					<span className="block font-medium">On sale</span>
+					<span className="block text-[13px] text-muted-foreground">
+						Admins see it, with its price, in Plan & usage and can ask for it. Until then, only you can add it.
+					</span>
+				</span>
+			</label>
+			<p className="text-xs leading-5 text-muted-foreground">
+				Changing a price doesn't change what organizations already have. They keep the price agreed when it was added.
+			</p>
+			<div className="flex justify-end gap-2">
+				<button type="button" className={buttonClass("outline")} onClick={onDone}>Cancel</button>
+				<button type="submit" disabled={save.isPending} className={buttonClass()}>Save</button>
+			</div>
+		</form>
+	);
+}
+
+function AddAddonForm({ catalog, onDone }: { catalog: AddonsOverview["catalog"]; onDone: () => void }) {
+	const queryClient = useQueryClient();
+	const organizations = useQuery({
+		queryKey: ORGS_KEY,
+		queryFn: () => api<{ organizations: Organization[] }>("/superadmin/organizations"),
+		select: (data) => data.organizations,
+	});
+	const [values, setValues] = useState({
+		organizationId: "",
+		addonKey: catalog[0]?.key ?? "module:projects",
+		quantity: "1",
+		cycle: "monthly" as "monthly" | "yearly",
+		price: String((catalog[0]?.monthlyPrice ?? 0) / 100),
+		endsAt: "",
+		note: "",
+	});
+	const item = catalog.find((row) => row.key === values.addonKey);
+	const listPrice = (key: string, cycle: "monthly" | "yearly", quantity: string) => {
+		const row = catalog.find((entry) => entry.key === key);
+		const unit = cycle === "yearly" ? (row?.yearlyPrice ?? 0) : (row?.monthlyPrice ?? 0);
+		return String(((unit * (key === "ai:messages" ? Number(quantity || 1) : 1)) / 100).toFixed(2).replace(/\.00$/, ""));
+	};
+	const set = (changes: Partial<typeof values>) =>
+		setValues((current) => {
+			const next = { ...current, ...changes };
+			// The agreed price starts at the list price, and can be changed for a deal.
+			if ("addonKey" in changes || "cycle" in changes || "quantity" in changes) next.price = listPrice(next.addonKey, next.cycle, next.quantity);
+			return next;
+		});
+	const save = useMutation({
+		mutationFn: () =>
+			api("/superadmin/organization-addons", {
+				method: "POST",
+				body: {
+					organizationId: Number(values.organizationId),
+					addonKey: values.addonKey,
+					quantity: Number(values.quantity || 1),
+					price: Math.round(Number(values.price || 0) * 100),
+					billingCycle: values.cycle,
+					endsAt: values.endsAt,
+					note: values.note,
+				},
+			}),
+		onSuccess: async () => {
+			await queryClient.invalidateQueries({ queryKey: ["superadmin"] });
+			onDone();
+		},
+	});
+	const already = save.error instanceof ApiError && save.error.code === "ALREADY_ADDED";
+	return (
+		<form
+			className="flex flex-col gap-3.5"
+			onSubmit={(event) => {
+				event.preventDefault();
+				save.mutate();
+			}}
+		>
+			{save.isError && <Alert>{already ? "This organization already has that add-on." : "That didn't save. Check the details."}</Alert>}
+			<SelectField label="Organization" required value={values.organizationId} onChange={(event) => set({ organizationId: event.target.value })}>
+				<option value="">Choose an organization</option>
+				{organizations.data?.map((org) => (
+					<option key={org.id} value={org.id}>{org.name}</option>
+				))}
+			</SelectField>
+			<SelectField label="Add-on" value={values.addonKey} onChange={(event) => set({ addonKey: event.target.value as AddonKey })}>
+				{catalog.map((row) => (
+					<option key={row.key} value={row.key}>{ADDON_NAMES[row.key]}</option>
+				))}
+			</SelectField>
+			<div className="grid grid-cols-2 gap-3">
+				{values.addonKey === "ai:messages" && (
+					<Field
+						label="Packs"
+						type="number"
+						min={1}
+						max={100}
+						required
+						hint={item?.unitSize ? `${item.unitSize.toLocaleString()} messages a month each` : undefined}
+						value={values.quantity}
+						onChange={(event) => set({ quantity: event.target.value })}
+					/>
+				)}
+				<SelectField label="Billing" value={values.cycle} onChange={(event) => set({ cycle: event.target.value as "monthly" | "yearly" })}>
+					<option value="monthly">Monthly</option>
+					<option value="yearly">Yearly</option>
+				</SelectField>
+				<Field
+					label={`Agreed price (USD / ${values.cycle === "yearly" ? "year" : "month"})`}
+					type="number"
+					min={0}
+					step="0.01"
+					required
+					hint="0 to include it free"
+					value={values.price}
+					onChange={(event) => setValues((current) => ({ ...current, price: event.target.value }))}
+				/>
+				<Field label="Ends" type="date" hint="Empty for no end date" value={values.endsAt} onChange={(event) => set({ endsAt: event.target.value })} />
+			</div>
+			<TextareaField label="Note" rows={2} maxLength={300} hint="For example the invoice or quote number" value={values.note} onChange={(event) => set({ note: event.target.value })} />
+			<p className="text-xs leading-5 text-muted-foreground">
+				No payment is taken in AidNova. A module add-on lets the organization's admin turn that module on. A message pack adds to
+				their monthly Ask AidNova limit.
+			</p>
+			<div className="flex justify-end gap-2">
+				<button type="button" className={buttonClass("outline")} onClick={onDone}>Cancel</button>
+				<button type="submit" disabled={save.isPending || !values.organizationId} className={buttonClass()}>Add</button>
+			</div>
+		</form>
+	);
+}
+
+export function SuperAddonsPage({ me }: { me: Me }) {
+	const queryClient = useQueryClient();
+	const overview = useQuery({ queryKey: ADDONS_KEY, queryFn: () => api<AddonsOverview>("/superadmin/addons") });
+	const [pricing, setPricing] = useState<AddonsOverview["catalog"][number] | null>(null);
+	const [adding, setAdding] = useState(false);
+	const [cancelling, setCancelling] = useState<AddonsOverview["active"][number] | null>(null);
+	const refresh = () => queryClient.invalidateQueries({ queryKey: ["superadmin"] });
+	const decide = useMutation({
+		mutationFn: ({ id, decision }: { id: number; decision: "approve" | "dismiss" }) =>
+			api(`/superadmin/addon-requests/${id}/${decision}`, { method: "POST" }),
+		onSuccess: refresh,
+	});
+	const cancel = useMutation({
+		mutationFn: (id: number) => api(`/superadmin/organization-addons/${id}/cancel`, { method: "POST" }),
+		onSuccess: async () => {
+			setCancelling(null);
+			await refresh();
+		},
+	});
+	const data = overview.data;
+	const priceText = (cents: number, cycle: "monthly" | "yearly") => (cents === 0 ? "Free" : `${money(cents)} / ${cycle === "yearly" ? "year" : "month"}`);
+	return (
+		<Layout
+			me={me}
+			title="Add-ons"
+			subtitle="Modules and Ask AidNova message packs sold on top of a plan. Nothing is offered to customers until it's on sale."
+			action={
+				<button type="button" className={buttonClass()} disabled={!data} onClick={() => setAdding(true)}>
+					+ Add to an organization
+				</button>
+			}
+		>
+			{overview.isPending && <PageLoading variant="inline" />}
+			{overview.isError && <PageError onRetry={() => overview.refetch()} />}
+			{data && (
+				<>
+					{data.requests.length > 0 && (
+						<section className="flex flex-col gap-3">
+							<h2 className="text-lg font-semibold">Waiting for you</h2>
+							<ul className="flex flex-col gap-3">
+								{data.requests.map((request) => (
+									<li key={request.id} className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+										<div className="min-w-0 flex-[1_1_260px]">
+											<p className="font-semibold">{request.organizationName}</p>
+											<p className="text-[13px] text-muted-foreground">
+												{ADDON_NAMES[request.addonKey]}
+												{request.addonKey === "ai:messages" && ` × ${request.quantity}`} · {request.billingCycle} · asked{" "}
+												{formatDate(request.createdAt)}
+											</p>
+											{request.message && <p className="mt-1 text-[13px]">“{request.message}”</p>}
+										</div>
+										<span className="flex gap-2">
+											<button type="button" className={buttonClass("outline")} disabled={decide.isPending} onClick={() => decide.mutate({ id: request.id, decision: "dismiss" })}>
+												Dismiss
+											</button>
+											<button type="button" className={buttonClass()} disabled={decide.isPending} onClick={() => decide.mutate({ id: request.id, decision: "approve" })}>
+												Approve
+											</button>
+										</span>
+									</li>
+								))}
+							</ul>
+							{decide.isError && <Alert>That didn't work. If they already have it, dismiss the request.</Alert>}
+						</section>
+					)}
+
+					<section className="flex flex-col gap-3">
+						<div>
+							<h2 className="text-lg font-semibold">Price list</h2>
+							<p className="text-[13px] text-muted-foreground">
+								A module also comes with any plan that includes it, set under Modules. Free grants there keep working, so
+								anyone promised a module at no extra cost keeps it.
+							</p>
+						</div>
+						<ul className="flex flex-col gap-3">
+							{data.catalog.map((item) => (
+								<li key={item.key} className="flex flex-wrap items-center gap-3 rounded-card border border-border bg-card p-4">
+									<div className="min-w-0 flex-[1_1_260px]">
+										<p className="flex flex-wrap items-center gap-2 font-semibold">
+											{ADDON_NAMES[item.key]}
+											<Chip tone={item.onSale ? "success" : "neutral"}>{item.onSale ? "On sale" : "Not on sale"}</Chip>
+										</p>
+										<p className="text-[13px] text-muted-foreground">
+											{item.monthlyPrice === 0 && item.yearlyPrice === 0
+												? "No price set"
+												: `${money(item.monthlyPrice)} / month · ${money(item.yearlyPrice)} / year`}
+											{item.key === "ai:messages" && item.unitSize !== null && ` · ${item.unitSize.toLocaleString()} messages a month per pack`}
+										</p>
+									</div>
+									<button type="button" aria-label={`Edit ${ADDON_NAMES[item.key]}`} className={buttonClass("outline")} onClick={() => setPricing(item)}>
+										Edit
+									</button>
+								</li>
+							))}
+						</ul>
+					</section>
+
+					<section className="flex flex-col gap-3">
+						<h2 className="text-lg font-semibold">Organizations with add-ons</h2>
+						{data.active.length === 0 ? (
+							<p className="rounded-card border border-border bg-card p-4 text-muted-foreground">No organization has an add-on yet.</p>
+						) : (
+							<DataTable head={["Organization", "Add-on", "Price", "Ends", <span key="actions" className="sr-only">Actions</span>]}>
+								{data.active.map((row) => (
+									<tr key={row.id}>
+										<td className={`${TABLE_CELL} break-words`}>
+											<span className="block font-medium">{row.organizationName}</span>
+											{row.note && <span className="block text-xs text-muted-foreground">{row.note}</span>}
+										</td>
+										<td className={TABLE_CELL}>
+											{ADDON_NAMES[row.addonKey]}
+											{row.addonKey === "ai:messages" && ` × ${row.quantity}`}
+										</td>
+										<td className={`${TABLE_CELL} tabular-nums`}>{priceText(row.price, row.billingCycle)}</td>
+										<td className={TABLE_CELL}>{row.endsAt ? formatDate(row.endsAt) : "No end date"}</td>
+										<td className={`${TABLE_CELL} text-right`}>
+											<button type="button" aria-label={`Cancel ${ADDON_NAMES[row.addonKey]} for ${row.organizationName}`} className={buttonClass("outline", BUTTON_SMALL)} onClick={() => setCancelling(row)}>
+												Cancel
+											</button>
+										</td>
+									</tr>
+								))}
+							</DataTable>
+						)}
+					</section>
+				</>
+			)}
+			<Modal title={pricing ? ADDON_NAMES[pricing.key] : ""} open={pricing !== null} onClose={() => setPricing(null)}>
+				{pricing && <AddonPriceForm key={pricing.key} item={pricing} onDone={() => setPricing(null)} />}
+			</Modal>
+			<Modal title="Add to an organization" open={adding} onClose={() => setAdding(false)}>
+				{adding && data && <AddAddonForm catalog={data.catalog} onDone={() => setAdding(false)} />}
+			</Modal>
+			<ConfirmModal
+				title={cancelling ? `Cancel ${ADDON_NAMES[cancelling.addonKey]} for ${cancelling.organizationName}?` : ""}
+				description="A module add-on stops right away, unless their plan includes the module. Their records are kept. A message pack stops adding to their monthly limit."
+				confirmLabel="Cancel add-on"
+				open={cancelling !== null}
+				pending={cancel.isPending}
+				failed={cancel.isError}
+				failedMessage="That didn't work. Please try again."
+				onConfirm={() => cancelling && cancel.mutate(cancelling.id)}
+				onClose={() => setCancelling(null)}
+			/>
 		</Layout>
 	);
 }

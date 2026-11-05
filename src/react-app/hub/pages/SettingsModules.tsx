@@ -23,7 +23,7 @@ interface ModuleState {
 	paused: boolean;
 	needsReview: boolean;
 	entitled: boolean;
-	source: "override" | "trial" | "plan" | null;
+	source: "override" | "addon" | "trial" | "plan" | null;
 	enabled: boolean;
 	active: boolean;
 	overrideUntil: string | null;
@@ -165,6 +165,7 @@ function ModuleCard({ module }: { module: ModuleState }) {
 						<span className="text-xs text-muted-foreground">{planNames}</span>
 					</div>
 					<p className="mt-1 text-[13px] text-muted-foreground">{t(`modules.${module.key}_desc`)}</p>
+					{module.source === "addon" && <p className="mt-1 text-xs text-muted-foreground">{t("modules.from_addon")}</p>}
 					{module.source === "override" && (
 						<p className="mt-1 text-xs text-muted-foreground">
 							{module.overrideUntil
